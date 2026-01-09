@@ -1,0 +1,10 @@
+body { font-family: system-ui, -apple-system, Segoe UI, Arial; background:#0b0b12; color:#fff; margin:0; }
+.container { max-width: 520px; margin: 40px auto; padding: 0 16px; }
+.card { background:#141426; border:1px solid #2a2a44; border-radius:16px; padding:20px; }
+label { display:block; margin:12px 0 6px; opacity:.9; }
+input { width:100%; padding:10px 12px; border-radius:12px; border:1px solid #2a2a44; background:#0f0f1d; color:#fff; }
+button { margin-top:14px; padding:10px 14px; border:0; border-radius:12px; background:#7c5cff; color:#fff; cursor:pointer; }
+.msg { margin-top:10px; color:#ffb3b3; min-height: 18px; }
+.topbar { display:flex; align-items:center; gap:10px; padding:14px 16px; border-bottom:1px solid #2a2a44; }
+.grow { flex:1; }
+.icon { width:22px; height:22px; }
