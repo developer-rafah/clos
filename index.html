@@ -2,87 +2,211 @@
 <html lang="ar" dir="rtl">
 <head>
   <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover" />
-  <meta name="theme-color" content="#0B1220" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <meta name="theme-color" content="#0e0b14" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="referrer" content="no-referrer" />
+
+  <title>Clos | Rafah</title>
+
   <link rel="manifest" href="/manifest.webmanifest" />
-  <title>RAFah CLOS</title>
+  <link rel="icon" href="/icons/icon-192.svg" type="image/svg+xml" />
+  <link rel="apple-touch-icon" href="/icons/icon-512.svg" />
 
   <style>
     :root{
-      --primary:#5E519B;      /* من الشعار */
-      --accent:#B07AAE;       /* من الشعار */
-      --bg:#0B1220;
-      --surface:#111A2E;
-      --border:#243046;
-      --text:#F4F6FF;
-      --muted:#B9C0D9;
-      --brand-grad: linear-gradient(135deg,#5E519B 0%,#7A5BB5 45%,#B07AAE 100%);
-      --shadow: 0 14px 34px rgba(0,0,0,.35);
-      --radius: 16px;
+      --bg:#0e0b14;
+      --card: rgba(255,255,255,.08);
+      --stroke: rgba(255,255,255,.14);
+      --txt:#fff;
+      --muted: rgba(255,255,255,.75);
+      --p:#7a5ea8; --s:#b88fcf;
     }
-    html,body{height:100%;margin:0;background:var(--bg);color:var(--text);font-family:Tajawal,Cairo,system-ui}
-    .app{
-      height:100%;
-      padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
-      display:flex;flex-direction:column;
-      background:
-        radial-gradient(900px 500px at 20% 0%, rgba(94,81,155,.35), transparent 55%),
-        radial-gradient(900px 500px at 90% 10%, rgba(176,122,174,.28), transparent 60%),
-        var(--bg);
-    }
-    header{
-      height:56px;display:flex;align-items:center;justify-content:space-between;
-      padding:0 16px;
-      background:rgba(17,26,46,.72);
-      border-bottom:1px solid rgba(36,48,70,.7);
-      backdrop-filter: blur(10px);
-    }
-    .title{font-weight:900;letter-spacing:.2px}
-    .status{font-size:12px;color:var(--muted);font-weight:800}
-    .card{
-      margin:12px;
-      border:1px solid rgba(36,48,70,.8);
-      border-radius:var(--radius);
-      background: linear-gradient(180deg, rgba(17,26,46,.92), rgba(15,26,51,.88));
-      box-shadow: var(--shadow);
+    *{box-sizing:border-box}
+    html,body{height:100%}
+    body{
+      margin:0;
+      background: radial-gradient(900px 520px at 75% 10%, rgba(184,143,207,.16), transparent 60%),
+                  radial-gradient(700px 420px at 10% 80%, rgba(122,94,168,.14), transparent 60%),
+                  linear-gradient(180deg, #0e0b14, #1a1326);
+      color:var(--txt);
+      font-family: system-ui, -apple-system, "Segoe UI", Tahoma, Arial;
       overflow:hidden;
-      display:flex;flex-direction:column;
-      min-height: 0;
-      flex: 1;
     }
-    .hint{padding:10px 14px;color:var(--muted);font-size:12px;font-weight:800}
-    iframe{
-      flex:1;border:0;width:100%;background:#fff;
+
+    /* Fullscreen iframe */
+    #frame{
+      position:fixed; inset:0;
+      width:100vw; height:100vh;
+      border:0;
+      background:#0e0b14;
     }
-    .bar{display:flex;gap:10px;padding:0 12px 12px}
-    button{
-      flex:1; padding:12px 14px; border-radius:14px; border:1px solid rgba(36,48,70,.8);
-      background: rgba(17,26,46,.8); color:var(--text); font-weight:900; cursor:pointer;
+
+    /* Loading overlay */
+    #overlay{
+      position:fixed; inset:0;
+      display:flex; align-items:center; justify-content:center;
+      padding:18px;
+      background: rgba(14,11,20,.82);
+      backdrop-filter: blur(10px);
+      z-index:9999;
     }
-    .primary{background:var(--brand-grad); border-color:transparent; box-shadow:0 10px 22px rgba(94,81,155,.35)}
+    .card{
+      width:min(560px, 100%);
+      background: var(--card);
+      border: 1px solid var(--stroke);
+      border-radius: 22px;
+      padding: 16px;
+      box-shadow: 0 18px 42px rgba(0,0,0,.45);
+    }
+    .row{display:flex; gap:12px; align-items:center}
+    .logo{
+      width:44px;height:44px;border-radius:14px;
+      display:grid;place-items:center;
+      background: linear-gradient(135deg, rgba(122,94,168,.55), rgba(184,143,207,.45));
+      border:1px solid rgba(255,255,255,.18);
+      font-weight:900;
+    }
+    h1{margin:0;font-size:18px;font-weight:900}
+    p{margin:8px 0 0; color:var(--muted); font-weight:700; line-height:1.9}
+    .err{
+      margin-top:12px;
+      padding:12px 14px;
+      border-radius:16px;
+      background: rgba(251,113,133,.12);
+      border:1px solid rgba(251,113,133,.35);
+      color:#ffe4e6;
+      display:none;
+      line-height:1.8;
+      font-weight:800;
+      white-space:pre-wrap;
+    }
+    .btn{
+      margin-top:12px;
+      width:100%;
+      border:none;
+      border-radius:999px;
+      padding:12px 14px;
+      font-weight:900;
+      cursor:pointer;
+      color:#fff;
+      background: linear-gradient(135deg, var(--p), var(--s));
+    }
+    .meta{
+      margin-top:10px;
+      display:flex; gap:10px; flex-wrap:wrap;
+      color: rgba(255,255,255,.65);
+      font-weight:800;
+      font-size:12px;
+    }
+    .pill{
+      padding:6px 10px;
+      border-radius:999px;
+      border:1px solid rgba(255,255,255,.14);
+      background: rgba(255,255,255,.06);
+    }
   </style>
 </head>
-
 <body>
-  <div class="app">
-    <header>
-      <div class="title">جمعية رفحاء • CLOS</div>
-      <div class="status" id="status">...</div>
-    </header>
 
+  <iframe id="frame" title="clos-app"></iframe>
+
+  <div id="overlay">
     <div class="card">
-      <div class="hint" id="hint">سيتم فتح النظام. إذا طُلب منك تسجيل الدخول سيتم توجيهك تلقائيًا.</div>
-
-      <!-- سيتم تعيين src من app.js حسب وجود session -->
-      <iframe id="gasFrame" allow="clipboard-read; clipboard-write; notifications"></iframe>
-
-      <div class="bar">
-        <button class="primary" id="btnPush">تفعيل الإشعارات</button>
-        <button id="btnFull">فتح بصفحة كاملة</button>
+      <div class="row">
+        <div class="logo">C</div>
+        <div>
+          <h1>تشغيل النظام…</h1>
+          <p>جاري تحميل الإعدادات وفتح النظام داخل التطبيق.</p>
+        </div>
       </div>
+
+      <div class="meta">
+        <span class="pill" id="buildPill">BUILD: —</span>
+        <span class="pill" id="originPill">ORIGIN: —</span>
+      </div>
+
+      <div class="err" id="errBox"></div>
+      <button class="btn" id="retryBtn" style="display:none" onclick="boot()">إعادة المحاولة</button>
     </div>
   </div>
 
-  <script type="module" src="/app.js"></script>
+<script>
+  const overlay = document.getElementById("overlay");
+  const errBox  = document.getElementById("errBox");
+  const retryBtn= document.getElementById("retryBtn");
+  const frame   = document.getElementById("frame");
+
+  function showErr(msg){
+    errBox.style.display = "block";
+    errBox.textContent = msg || "حدث خطأ";
+    retryBtn.style.display = "block";
+  }
+  function hideErr(){
+    errBox.style.display = "none";
+    errBox.textContent = "";
+    retryBtn.style.display = "none";
+  }
+
+  async function loadConfig(){
+    const res = await fetch("/app-config.json", { cache: "no-store" });
+    if (!res.ok) throw new Error("Config fetch failed: " + res.status);
+    return await res.json();
+  }
+
+  async function boot(){
+    hideErr();
+
+    // سجل Service Worker (لـ PWA)
+    try{
+      if ("serviceWorker" in navigator) {
+        await navigator.serviceWorker.register("/service-worker.js", { scope: "/" });
+      }
+    }catch(e){
+      // لا نوقف التطبيق بسبب SW
+      console.warn("SW register failed:", e);
+    }
+
+    // Load runtime config
+    let cfg;
+    try{
+      cfg = await loadConfig();
+    }catch(e){
+      console.error(e);
+      showErr("تعذر تحميل الإعدادات.\nتأكد أن /app-config.json يعمل وأن متغير GAS_URL مضبوط في Cloudflare.\n\n" + (e && e.message ? e.message : String(e)));
+      return;
+    }
+
+    document.getElementById("buildPill").textContent = "BUILD: " + (cfg.BUILD || "—");
+    document.getElementById("originPill").textContent = "ORIGIN: " + location.origin;
+
+    const gasUrl = String(cfg.GAS_URL || "").trim();
+    if (!gasUrl){
+      showErr("GAS_URL غير موجود في الإعدادات.\nضعه في Cloudflare Pages Environment Variables.");
+      return;
+    }
+
+    // افتح نظام GAS داخل iframe
+    // ملاحظة: نفتح المدخل الموحد page=auto (كما عندك)
+    const url = new URL(gasUrl);
+    if (!url.searchParams.get("page")) url.searchParams.set("page", "auto");
+
+    frame.src = url.toString();
+
+    // اخفِ شاشة التحميل بعد ما يبدأ iframe (تحميل أولي)
+    frame.addEventListener("load", () => {
+      overlay.style.display = "none";
+    }, { once:true });
+  }
+
+  window.addEventListener("online", () => {
+    // لو رجع الاتصال وواجهته كانت خطأ، جرب تلقائيًا
+    if (overlay.style.display !== "none") boot();
+  });
+
+  boot();
+</script>
+
 </body>
 </html>
