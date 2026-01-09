@@ -1,22 +1,35 @@
 export async function onRequestGet({ env }) {
-  const cfg = {
-    // أهم شيء
-    GAS_URL: env.GAS_URL || "",
+  const gasUrl = (env.GAS_URL || "").trim();
 
-    // اختياري (سنستخدمه لاحقًا للأمان في postMessage)
-    WRAPPER_ORIGIN: env.WRAPPER_ORIGIN || "",
+  if (!gasUrl) {
+    return new Response(
+      JSON.stringify({
+        ok: false,
+        error: "GAS_URL is not set in Cloudflare Pages Environment Variables",
+      }),
+      {
+        status: 500,
+        headers: {
+          "content-type": "application/json; charset=utf-8",
+          "cache-control": "no-store",
+        },
+      }
+    );
+  }
 
-    // اختياري (للمراحل القادمة)
-    FIREBASE_VAPID_KEY: env.FIREBASE_VAPID_KEY || "",
-    FIREBASE_CONFIG_JSON: env.FIREBASE_CONFIG_JSON || "",
-
-    BUILD: env.BUILD || ""
-  };
-
-  return new Response(JSON.stringify(cfg, null, 2), {
-    headers: {
-      "content-type": "application/json; charset=utf-8",
-      "cache-control": "no-store"
+  return new Response(
+    JSON.stringify({
+      ok: true,
+      GAS_URL: gasUrl,
+      // لاحقًا نضيف هنا مفاتيح أخرى إن احتجنا (مثلاً إعدادات FCM)، بدون لمس كود الفرونت
+    }),
+    {
+      status: 200,
+      headers: {
+        "content-type": "application/json; charset=utf-8",
+        // خليه قصير حتى إذا غيرت GAS_URL يتحدث بسرعة
+        "cache-control": "public, max-age=60",
+      },
     }
-  });
+  );
 }
