@@ -2,211 +2,147 @@
 <html lang="ar" dir="rtl">
 <head>
   <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-  <meta name="theme-color" content="#0e0b14" />
-  <meta name="apple-mobile-web-app-capable" content="yes" />
-  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
-  <meta name="referrer" content="no-referrer" />
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover" />
+  <title>Clos | جمعية رفاه</title>
 
-  <title>Clo | Rafah</title>
+  <link rel="manifest" href="/manifest.webmanifest">
+  <meta name="theme-color" content="#0e0b14">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <link rel="apple-touch-icon" href="/icons/apple-touch-icon.svg">
 
-  <link rel="manifest" href="/manifest.webmanifest" />
-  <link rel="icon" href="/icons/icon-192.svg" type="image/svg+xml" />
-  <link rel="apple-touch-icon" href="/icons/icon-512.svg" />
+  <!-- عندك غالبًا: /assets/css/app.css -->
+  <link rel="stylesheet" href="/assets/css/app.css">
 
   <style>
-    :root{
-      --bg:#0e0b14;
-      --card: rgba(255,255,255,.08);
-      --stroke: rgba(255,255,255,.14);
-      --txt:#fff;
-      --muted: rgba(255,255,255,.75);
-      --p:#7a5ea8; --s:#b88fcf;
-    }
-    *{box-sizing:border-box}
-    html,body{height:100%}
-    body{
-      margin:0;
-      background: radial-gradient(900px 520px at 75% 10%, rgba(184,143,207,.16), transparent 60%),
-                  radial-gradient(700px 420px at 10% 80%, rgba(122,94,168,.14), transparent 60%),
-                  linear-gradient(180deg, #0e0b14, #1a1326);
-      color:var(--txt);
-      font-family: system-ui, -apple-system, "Segoe UI", Tahoma, Arial;
-      overflow:hidden;
+    /* ضمان توافق التابلت + ملء الشاشة */
+    html, body { height: 100%; }
+    body { margin: 0; }
+    .appShell { min-height: 100vh; display: flex; flex-direction: column; }
+    .mainArea { flex: 1; min-height: 0; } /* مهم للـ iframe */
+    .hidden { display: none !important; }
+
+    /* iframe fullscreen داخل المحتوى */
+    .iframeWrap { height: 100%; }
+    .iframeWrap iframe {
+      width: 100%;
+      height: 100%;
+      border: 0;
+      border-radius: 14px;
+      background: rgba(255,255,255,.04);
     }
 
-    /* Fullscreen iframe */
-    #frame{
-      position:fixed; inset:0;
-      width:100vw; height:100vh;
-      border:0;
-      background:#0e0b14;
+    /* شاشة تحميل بسيطة */
+    .loadingBox {
+      height: 100%;
+      display: grid;
+      place-items: center;
+      padding: 18px;
+      opacity: .85;
+      font-family: Tajawal, Arial, sans-serif;
     }
 
-    /* Loading overlay */
-    #overlay{
-      position:fixed; inset:0;
-      display:flex; align-items:center; justify-content:center;
-      padding:18px;
-      background: rgba(14,11,20,.82);
-      backdrop-filter: blur(10px);
-      z-index:9999;
-    }
-    .card{
-      width:min(560px, 100%);
-      background: var(--card);
-      border: 1px solid var(--stroke);
-      border-radius: 22px;
-      padding: 16px;
-      box-shadow: 0 18px 42px rgba(0,0,0,.45);
-    }
-    .row{display:flex; gap:12px; align-items:center}
-    .logo{
-      width:44px;height:44px;border-radius:14px;
-      display:grid;place-items:center;
-      background: linear-gradient(135deg, rgba(122,94,168,.55), rgba(184,143,207,.45));
-      border:1px solid rgba(255,255,255,.18);
-      font-weight:900;
-    }
-    h1{margin:0;font-size:18px;font-weight:900}
-    p{margin:8px 0 0; color:var(--muted); font-weight:700; line-height:1.9}
-    .err{
-      margin-top:12px;
-      padding:12px 14px;
-      border-radius:16px;
-      background: rgba(251,113,133,.12);
-      border:1px solid rgba(251,113,133,.35);
-      color:#ffe4e6;
-      display:none;
-      line-height:1.8;
-      font-weight:800;
-      white-space:pre-wrap;
-    }
-    .btn{
-      margin-top:12px;
-      width:100%;
-      border:none;
-      border-radius:999px;
-      padding:12px 14px;
-      font-weight:900;
-      cursor:pointer;
-      color:#fff;
-      background: linear-gradient(135deg, var(--p), var(--s));
-    }
-    .meta{
-      margin-top:10px;
-      display:flex; gap:10px; flex-wrap:wrap;
-      color: rgba(255,255,255,.65);
-      font-weight:800;
-      font-size:12px;
-    }
-    .pill{
-      padding:6px 10px;
-      border-radius:999px;
-      border:1px solid rgba(255,255,255,.14);
+    /* صندوق تسجيل دخول بسيط (إن CSS مشروعك يغطيه ممتاز، هذا احتياطي) */
+    .loginCard {
+      max-width: 520px;
+      margin: 24px auto;
+      padding: 18px;
+      border-radius: 16px;
       background: rgba(255,255,255,.06);
+      border: 1px solid rgba(255,255,255,.12);
+      font-family: Tajawal, Arial, sans-serif;
     }
+    .loginCard h2 { margin: 0 0 12px; }
+    .loginCard label { display:block; margin: 10px 0 6px; opacity:.9; }
+    .loginCard input {
+      width: 100%;
+      padding: 12px 12px;
+      border-radius: 12px;
+      border: 1px solid rgba(255,255,255,.14);
+      background: rgba(0,0,0,.18);
+      color: #fff;
+      outline: none;
+      box-sizing: border-box;
+    }
+    .loginActions { display:flex; gap:10px; margin-top:14px; flex-wrap: wrap; }
+    .btnX {
+      padding: 10px 14px;
+      border-radius: 12px;
+      border: 1px solid rgba(255,255,255,.14);
+      background: rgba(255,255,255,.06);
+      color: #fff;
+      cursor: pointer;
+      font-family: Tajawal, Arial, sans-serif;
+    }
+    .btnX.primary {
+      background: #6d4cff;
+      border-color: rgba(109,76,255,.45);
+    }
+    .errBox { margin-top: 12px; color: #ffb4b4; opacity:.95; white-space: pre-wrap; }
+    .note { margin-top: 10px; opacity: .8; font-size: 13px; }
   </style>
 </head>
-<body>
 
-  <iframe id="frame" title="clos-app"></iframe>
-
-  <div id="overlay">
-    <div class="card">
-      <div class="row">
-        <div class="logo">C</div>
+<body class="appShell" style="background:#0e0b14;color:#fff">
+  <!-- Topbar (نفس فكرة ملفاتك القديمة) -->
+  <div class="container" style="padding: 12px">
+    <div class="topbar" style="display:flex;align-items:center;justify-content:space-between;gap:10px">
+      <div class="brand" style="display:flex;align-items:center;gap:10px">
+        <div class="logo" style="width:34px;height:34px;border-radius:12px;display:grid;place-items:center;background:rgba(255,255,255,.08)">🟣</div>
         <div>
-          <h1>تشغيل النظام…</h1>
-          <p>جاري تحميل الإعدادات وفتح النظام داخل التطبيق.</p>
+          <b>Clos | جمعية رفاه</b>
+          <div id="whoami" style="font-size:12px;opacity:.8;margin-top:2px"></div>
         </div>
       </div>
 
-      <div class="meta">
-        <span class="pill" id="buildPill">BUILD: —</span>
-        <span class="pill" id="originPill">ORIGIN: —</span>
+      <div class="actions" style="display:flex;gap:8px;flex-wrap:wrap">
+        <button id="btnReload" class="btnX" type="button">🔄 تحديث</button>
+        <button id="btnLogout" class="btnX primary hidden" type="button">🚪 تسجيل خروج</button>
       </div>
-
-      <div class="err" id="errBox"></div>
-      <button class="btn" id="retryBtn" style="display:none" onclick="boot()">إعادة المحاولة</button>
     </div>
   </div>
 
-<script>
-  const overlay = document.getElementById("overlay");
-  const errBox  = document.getElementById("errBox");
-  const retryBtn= document.getElementById("retryBtn");
-  const frame   = document.getElementById("frame");
+  <!-- Main -->
+  <div class="container mainArea" style="padding: 0 12px 12px">
+    <!-- شاشة تحميل -->
+    <div id="viewLoading" class="loadingBox">
+      <div>... جاري التحميل</div>
+    </div>
 
-  function showErr(msg){
-    errBox.style.display = "block";
-    errBox.textContent = msg || "حدث خطأ";
-    retryBtn.style.display = "block";
-  }
-  function hideErr(){
-    errBox.style.display = "none";
-    errBox.textContent = "";
-    retryBtn.style.display = "none";
-  }
+    <!-- شاشة تسجيل الدخول (داخل نفس الصفحة) -->
+    <div id="viewLogin" class="loginCard hidden">
+      <h2>تسجيل الدخول</h2>
+      <div style="opacity:.85;margin-bottom:10px">سجّل دخول مرة واحدة، ولن يتم تسجيل الخروج إلا عند اختيار “تسجيل خروج”.</div>
 
-  async function loadConfig(){
-    const res = await fetch("/app-config.json", { cache: "no-store" });
-    if (!res.ok) throw new Error("Config fetch failed: " + res.status);
-    return await res.json();
-  }
+      <form id="loginForm">
+        <label>اسم المستخدم</label>
+        <input id="inUser" autocomplete="username" inputmode="text" />
 
-  async function boot(){
-    hideErr();
+        <label>كلمة المرور</label>
+        <input id="inPass" type="password" autocomplete="current-password" />
 
-    // سجل Service Worker (لـ PWA)
-    try{
-      if ("serviceWorker" in navigator) {
-        await navigator.serviceWorker.register("/service-worker.js", { scope: "/" });
-      }
-    }catch(e){
-      // لا نوقف التطبيق بسبب SW
-      console.warn("SW register failed:", e);
-    }
+        <div class="loginActions">
+          <button class="btnX primary" type="submit">دخول</button>
+          <button id="btnClear" class="btnX" type="button">مسح</button>
+        </div>
 
-    // Load runtime config
-    let cfg;
-    try{
-      cfg = await loadConfig();
-    }catch(e){
-      console.error(e);
-      showErr("تعذر تحميل الإعدادات.\nتأكد أن /app-config.json يعمل وأن متغير GAS_URL مضبوط في Cloudflare.\n\n" + (e && e.message ? e.message : String(e)));
-      return;
-    }
+        <div id="loginErr" class="errBox"></div>
+        <div class="note">📌 للتثبيت كتطبيق: افتح الموقع من الجوال ثم “Add to Home Screen”.</div>
+      </form>
+    </div>
 
-    document.getElementById("buildPill").textContent = "BUILD: " + (cfg.BUILD || "—");
-    document.getElementById("originPill").textContent = "ORIGIN: " + location.origin;
+    <!-- شاشة النظام الداخلي (iframe) -->
+    <div id="viewFrame" class="iframeWrap hidden" style="height:100%">
+      <iframe
+        id="appFrame"
+        src="about:blank"
+        allow="geolocation; clipboard-read; clipboard-write; notifications"
+        referrerpolicy="no-referrer"
+      ></iframe>
+    </div>
+  </div>
 
-    const gasUrl = String(cfg.GAS_URL || "").trim();
-    if (!gasUrl){
-      showErr("GAS_URL غير موجود في الإعدادات.\nضعه في Cloudflare Pages Environment Variables.");
-      return;
-    }
-
-    // افتح نظام GAS داخل iframe
-    // ملاحظة: نفتح المدخل الموحد page=auto (كما عندك)
-    const url = new URL(gasUrl);
-    if (!url.searchParams.get("page")) url.searchParams.set("page", "auto");
-
-    frame.src = url.toString();
-
-    // اخفِ شاشة التحميل بعد ما يبدأ iframe (تحميل أولي)
-    frame.addEventListener("load", () => {
-      overlay.style.display = "none";
-    }, { once:true });
-  }
-
-  window.addEventListener("online", () => {
-    // لو رجع الاتصال وواجهته كانت خطأ، جرب تلقائيًا
-    if (overlay.style.display !== "none") boot();
-  });
-
-  boot();
-</script>
-
+  <!-- Entry -->
+  <script type="module" src="/assets/js/app.js"></script>
 </body>
 </html>
