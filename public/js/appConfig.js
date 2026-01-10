@@ -17,8 +17,10 @@ export async function loadAppConfig({ timeoutMs = 7000 } = {}) {
     if (!res.ok) throw new Error(`Config HTTP ${res.status}`);
     const data = await res.json();
 
-    if (!data?.ok || !data?.GAS_URL) throw new Error("Invalid config payload");
+    // ✅ التحقق الجديد: API_BASE بدل GAS_URL
+    if (!data?.ok || !data?.API_BASE) throw new Error("Invalid config payload");
 
+    // ✅ حفظ بالكاش
     localStorage.setItem(LS_KEY, JSON.stringify({ ts: Date.now(), data }));
     return data;
   } catch (e) {
@@ -27,7 +29,7 @@ export async function loadAppConfig({ timeoutMs = 7000 } = {}) {
     if (cachedRaw) {
       try {
         const cached = JSON.parse(cachedRaw);
-        if (cached?.data?.ok && cached?.data?.GAS_URL) return cached.data;
+        if (cached?.data?.ok && cached?.data?.API_BASE) return cached.data;
       } catch {}
     }
     throw e;
