@@ -1,35 +1,55 @@
-/* Service Worker: App Shell cache + Push notifications (FCM/WebPush) */
+/* Service Worker: safe caching (avoid stale HTML) + Push notifications */
 
-const CACHE_NAME = "clos-cache-v1";
-const APP_SHELL = [
+const VERSION = "v3"; // ✅ غيّرها عند أي إصدار جديد (v4, v5...)
+const CACHE_STATIC = `clos-static-${VERSION}`;
+const CACHE_HTML = `clos-html-${VERSION}`;
+
+// ملفات ثابتة (لا تضع app.js إذا كنت تغيّره كثيرًا بدون versioning)
+// الأفضل أن تعتمد على network-first + cache للأصول بشكل ديناميكي
+const STATIC_PRECACHE = [
   "/",
-  "/index.html",
   "/manifest.webmanifest",
   "/assets/css/app.css",
-  "/assets/js/app.js",
-  "/assets/js/app-config.js",
-  "/assets/js/api.js",
-  "/assets/js/auth.js",
-  "/assets/js/router.js",
-  "/assets/js/ui.js",
-  "/assets/js/push.js",
   "/icons/icon-192.svg",
   "/icons/icon-512.svg",
   "/icons/maskable-512.svg",
 ];
 
+// Helpers
+async function cachePut(cacheName, request, response) {
+  const cache = await caches.open(cacheName);
+  await cache.put(request, response);
+}
+
+async function cacheMatch(cacheName, request) {
+  const cache = await caches.open(cacheName);
+  return cache.match(request);
+}
+
 self.addEventListener("install", (event) => {
   self.skipWaiting();
   event.waitUntil(
-    caches.open(CACHE_NAME).then((c) => c.addAll(APP_SHELL)).catch(() => {})
+    (async () => {
+      const c = await caches.open(CACHE_STATIC);
+      await c.addAll(STATIC_PRECACHE);
+    })().catch(() => {})
   );
 });
 
 self.addEventListener("activate", (event) => {
   event.waitUntil(
     (async () => {
+      // احذف أي كاش قديم
       const keys = await caches.keys();
-      await Promise.all(keys.map((k) => (k === CACHE_NAME ? null : caches.delete(k))));
+      await Promise.all(
+        keys.map((k) => {
+          if (k.startsWith("clos-") && k !== CACHE_STATIC && k !== CACHE_HTML) {
+            return caches.delete(k);
+          }
+          return null;
+        })
+      );
+
       await self.clients.claim();
     })()
   );
@@ -37,21 +57,88 @@ self.addEventListener("activate", (event) => {
 
 self.addEventListener("fetch", (event) => {
   const req = event.request;
+  if (req.method !== "GET") return;
+
   const url = new URL(req.url);
 
-  // لا نخزن /api
+  // لا تتدخل مع الـ API
   if (url.pathname.startsWith("/api")) return;
 
+  // طلبات التنقل (HTML / SPA routes)
+  // ✅ Network-first: دائماً حاول تجيب الجديد
+  const isNavigation =
+    req.mode === "navigate" ||
+    (req.headers.get("accept") || "").includes("text/html");
+
+  if (isNavigation) {
+    event.respondWith(
+      (async () => {
+        try {
+          const fresh = await fetch(req, { cache: "no-store" });
+          // خزّن نسخة HTML لتعمل أوفلاين
+          await cachePut(CACHE_HTML, req, fresh.clone());
+          return fresh;
+        } catch {
+          // أوفلاين: رجّع آخر HTML مخزن
+          const cached = await cacheMatch(CACHE_HTML, req);
+          if (cached) return cached;
+
+          // fallback: index.html
+          const fallback = await cacheMatch(CACHE_HTML, "/index.html");
+          if (fallback) return fallback;
+
+          // آخر محاولة: من static cache
+          const fromStatic = await caches.match("/index.html");
+          return fromStatic || new Response("Offline", { status: 503 });
+        }
+      })()
+    );
+    return;
+  }
+
+  // الأصول الثابتة (CSS/JS/SVG/Images): Stale-while-revalidate
+  const isAsset =
+    url.pathname.startsWith("/assets/") ||
+    url.pathname.startsWith("/icons/") ||
+    url.pathname === "/manifest.webmanifest";
+
+  if (isAsset) {
+    event.respondWith(
+      (async () => {
+        const cached = await caches.match(req);
+        const fetchPromise = (async () => {
+          try {
+            const fresh = await fetch(req);
+            // خزّن في static cache
+            await cachePut(CACHE_STATIC, req, fresh.clone());
+            return fresh;
+          } catch {
+            return null;
+          }
+        })();
+
+        // قدّم الكاش فورًا لو موجود، وحدّث بالخلفية
+        if (cached) {
+          event.waitUntil(fetchPromise);
+          return cached;
+        }
+
+        // لو ما فيه كاش، انتظر الشبكة
+        const fresh = await fetchPromise;
+        return fresh || new Response("Offline", { status: 503 });
+      })()
+    );
+    return;
+  }
+
+  // أي شيء آخر: جرّب الشبكة ثم كاش عام
   event.respondWith(
     (async () => {
       try {
-        const cached = await caches.match(req);
-        if (cached) return cached;
-        const res = await fetch(req);
-        return res;
+        return await fetch(req);
       } catch {
-        // Offline fallback (لو احتجنا)
-        return caches.match("/index.html");
+        const cached = await caches.match(req);
+        return cached || new Response("Offline", { status: 503 });
       }
     })()
   );
@@ -70,7 +157,7 @@ self.addEventListener("push", (event) => {
   const data = payload.data || payload || {};
   const title = n.title || data.title || "تنبيه جديد";
   const body = n.body || data.body || "لديك تحديث جديد داخل النظام.";
-  const url = data.url || "/";
+  const targetUrl = data.url || "/";
 
   event.waitUntil(
     self.registration.showNotification(title, {
@@ -79,14 +166,14 @@ self.addEventListener("push", (event) => {
       badge: "/icons/icon-192.svg",
       dir: "rtl",
       lang: "ar",
-      data: { url },
+      data: { url: targetUrl },
     })
   );
 });
 
 self.addEventListener("notificationclick", (event) => {
   event.notification.close();
-  const url = (event.notification && event.notification.data && event.notification.data.url) || "/";
+  const targetUrl = (event.notification?.data?.url) || "/";
 
   event.waitUntil(
     (async () => {
@@ -94,11 +181,11 @@ self.addEventListener("notificationclick", (event) => {
       for (const c of all) {
         if ("focus" in c) {
           await c.focus();
-          c.navigate(url);
+          try { await c.navigate(targetUrl); } catch {}
           return;
         }
       }
-      if (clients.openWindow) return clients.openWindow(url);
+      if (clients.openWindow) return clients.openWindow(targetUrl);
     })()
   );
 });
