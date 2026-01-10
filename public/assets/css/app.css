@@ -1,0 +1,193 @@
+:root{
+  --bg0:#07050d;
+  --bg1:#0b0612;
+  --card: rgba(255,255,255,.06);
+  --stroke: rgba(255,255,255,.12);
+  --text: #ffffff;
+  --muted: rgba(255,255,255,.72);
+  --muted2: rgba(255,255,255,.55);
+  --accent: #7C5CFF;
+  --accent2:#4B2BFF;
+  --danger:#ff5a7a;
+  --ok:#2fe0b0;
+
+  --radius: 22px;
+  --shadow: 0 24px 90px rgba(0,0,0,.55);
+  --font: system-ui, -apple-system, "Segoe UI", Tahoma, Arial, sans-serif;
+}
+
+*{ box-sizing:border-box; }
+html,body{ height:100%; }
+body{
+  margin:0;
+  font-family: var(--font);
+  color:var(--text);
+  background: var(--bg0);
+  overflow-x:hidden;
+}
+
+.bg{
+  position: fixed;
+  inset: 0;
+  background:
+    radial-gradient(1100px 600px at 70% 10%, rgba(124,92,255,.22), transparent 55%),
+    radial-gradient(900px 500px at 20% 20%, rgba(75,43,255,.18), transparent 55%),
+    radial-gradient(900px 700px at 50% 90%, rgba(255,90,122,.10), transparent 60%),
+    linear-gradient(180deg, var(--bg0), var(--bg1));
+  z-index:-1;
+}
+
+.topbar{
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  padding: clamp(14px, 2.2vw, 18px) clamp(14px, 3.2vw, 26px);
+}
+
+.brand{ display:flex; gap:12px; align-items:center; }
+.brand__logo{
+  width:44px; height:44px; border-radius:14px;
+  background: rgba(255,255,255,.06);
+  border:1px solid var(--stroke);
+  padding:6px;
+  box-shadow: 0 10px 30px rgba(0,0,0,.35);
+}
+.brand__title{ font-weight:800; letter-spacing:.2px; font-size:18px; line-height:1.1; }
+.brand__sub{ font-size:12px; color:var(--muted2); margin-top:2px; }
+
+.topbar__actions{ display:flex; gap:10px; align-items:center; }
+
+.wrap{
+  padding: 10px clamp(14px, 3.2vw, 26px) 30px;
+  display:flex;
+  justify-content:center;
+}
+
+.card{
+  width: min(920px, 100%);
+  background: var(--card);
+  border: 1px solid var(--stroke);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  padding: clamp(18px, 3vw, 28px);
+  backdrop-filter: blur(12px);
+}
+
+.foot{
+  padding: 14px 18px 22px;
+  text-align:center;
+  color: var(--muted2);
+  font-size: 12px;
+}
+
+.h1{
+  font-size: clamp(24px, 3vw, 34px);
+  font-weight: 900;
+  margin: 0 0 14px;
+}
+
+.muted{ color: var(--muted); }
+.small{ font-size: 12px; color: var(--muted2); }
+
+.row{ display:flex; gap:14px; flex-wrap:wrap; }
+.col{ flex:1; min-width: 240px; }
+
+.hr{
+  height:1px; background: rgba(255,255,255,.10);
+  margin: 16px 0;
+  border:0;
+}
+
+.input{
+  width:100%;
+  padding: 14px 16px;
+  border-radius: 16px;
+  border:1px solid rgba(255,255,255,.14);
+  background: rgba(0,0,0,.25);
+  color: #fff;
+  outline:none;
+  font-size: 15px;
+}
+.input:focus{
+  border-color: rgba(124,92,255,.55);
+  box-shadow: 0 0 0 4px rgba(124,92,255,.14);
+}
+
+.label{ margin: 10px 0 8px; color: var(--muted); font-size: 13px; }
+
+.btn{
+  border:0;
+  padding: 12px 16px;
+  border-radius: 16px;
+  cursor:pointer;
+  font-weight:800;
+  color:#fff;
+  background: linear-gradient(135deg, var(--accent), var(--accent2));
+  box-shadow: 0 12px 30px rgba(124,92,255,.18);
+}
+.btn:active{ transform: translateY(1px); }
+
+.btn--ghost{
+  background: rgba(255,255,255,.06);
+  border:1px solid rgba(255,255,255,.14);
+  box-shadow:none;
+  color:#fff;
+}
+
+.btn--danger{
+  background: rgba(255,90,122,.12);
+  border:1px solid rgba(255,90,122,.35);
+}
+
+.alert{
+  padding: 12px 14px;
+  border-radius: 16px;
+  border:1px solid rgba(255,90,122,.35);
+  background: rgba(255,90,122,.10);
+  color: #ffd2dc;
+  margin-top: 12px;
+  white-space: pre-wrap;
+}
+
+.pill{
+  display:inline-flex;
+  align-items:center;
+  gap:8px;
+  padding: 8px 12px;
+  border-radius: 999px;
+  border:1px solid rgba(255,255,255,.14);
+  background: rgba(255,255,255,.06);
+  color:#fff;
+  font-size: 13px;
+}
+
+.center{
+  display:flex;
+  flex-direction:column;
+  align-items:center;
+  justify-content:center;
+  min-height: 320px;
+  gap: 14px;
+  text-align:center;
+}
+
+.spinner{
+  width: 44px;
+  height: 44px;
+  border-radius: 999px;
+  border: 4px solid rgba(255,255,255,.18);
+  border-top-color: var(--accent);
+  animation: spin 1s linear infinite;
+}
+
+@keyframes spin{ to{ transform: rotate(360deg); } }
+
+/* ✅ Tablet-friendly */
+@media (min-width: 768px){
+  .center{ min-height: 420px; }
+}
+
+/* ✅ Large tablets / small laptops */
+@media (min-width: 1024px){
+  .card{ padding: 30px; }
+}
