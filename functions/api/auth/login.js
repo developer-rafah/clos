@@ -1,4 +1,4 @@
-import { ok, fail } from "../../_lib/response.js";
+import { json, fail } from "../../_lib/response.js";
 import { getUserByUsername } from "../../_lib/supabase.js";
 import { constantTimeEqual, setCookie } from "../../_lib/security.js";
 import { signJwt } from "../../_lib/jwt.js";
@@ -21,9 +21,7 @@ export async function onRequestPost({ request, env }) {
     if (u.active === false) return fail("الحساب غير مفعل", 403);
 
     const dbPass = String(u.password || "").trim();
-    if (!dbPass || !constantTimeEqual(dbPass, password)) {
-      return fail("بيانات الدخول غير صحيحة", 401);
-    }
+    if (!dbPass || !constantTimeEqual(dbPass, password)) return fail("بيانات الدخول غير صحيحة", 401);
 
     const user = {
       username: String(u.username || username),
@@ -37,10 +35,11 @@ export async function onRequestPost({ request, env }) {
       { expSec: 60 * 60 * 24 * 14 }
     );
 
-    const headers = new Headers();
-    headers.append("set-cookie", setCookie(COOKIE_NAME, token, { maxAge: 60 * 60 * 24 * 14 }));
-
-    return ok({ user, token }, 200, headers);
+    return json(
+      { ok: true, success: true, user, token },
+      200,
+      { "set-cookie": setCookie(COOKIE_NAME, token, { maxAge: 60 * 60 * 24 * 14 }) }
+    );
   } catch (e) {
     return fail(e?.message || String(e), 500);
   }
