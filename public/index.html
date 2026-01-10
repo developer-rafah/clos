@@ -6,6 +6,11 @@
   <meta name="theme-color" content="#7C5CFF" />
   <title>Clos | جمعية رفاه</title>
 
+  <!-- Helps reduce stale HTML in some environments (best handled via _headers) -->
+  <meta http-equiv="Cache-Control" content="no-store, max-age=0" />
+  <meta http-equiv="Pragma" content="no-cache" />
+  <meta http-equiv="Expires" content="0" />
+
   <link rel="manifest" href="/manifest.webmanifest" />
   <link rel="icon" href="/icons/icon-192.svg" />
   <link rel="apple-touch-icon" href="/icons/icon-192.svg" />
@@ -13,6 +18,12 @@
 </head>
 
 <body>
+  <noscript>
+    <div style="padding:16px;max-width:720px;margin:24px auto;background:#2a1f3f;color:#fff;border-radius:12px;">
+      هذه الصفحة تحتاج تفعيل JavaScript لتعمل بشكل صحيح.
+    </div>
+  </noscript>
+
   <div class="bg"></div>
 
   <header class="topbar">
@@ -34,7 +45,7 @@
   <main class="wrap">
     <section id="app" class="card">
       <!-- SPA renders here -->
-      <div class="center">
+      <div class="center" id="bootLoading">
         <div class="spinner"></div>
         <div class="muted">... جاري التحميل</div>
       </div>
@@ -45,6 +56,40 @@
     <span class="muted">© Clos - Rafah</span>
   </footer>
 
-  <script type="module" src="/assets/js/app.js"></script>
+  <!-- App bootstrap -->
+  <script type="module">
+    // زر تحديث: يجبر إعادة تحميل الصفحة + يتأكد من عدم استخدام cache قدر الإمكان
+    const btn = document.getElementById("btnRefresh");
+    if (btn) {
+      btn.addEventListener("click", async () => {
+        try {
+          // محاولة بسيطة لتحديث SW إن وجد
+          if ("serviceWorker" in navigator) {
+            const reg = await navigator.serviceWorker.getRegistration();
+            await reg?.update();
+          }
+        } catch {}
+        // reload hard-ish
+        location.reload();
+      });
+    }
+
+    // تحميل app.js مع معالجة فشل التحميل بشكل واضح للمستخدم
+    const s = document.createElement("script");
+    s.type = "module";
+    // cache bust (خفيف) لتقليل مشكلة النسخ القديمة إذا صار caching
+    s.src = "/assets/js/app.js?v=" + Date.now();
+    s.onerror = () => {
+      const app = document.getElementById("app");
+      if (app) {
+        app.innerHTML = `
+          <div style="padding:16px">
+            <div class="alert">تعذر تحميل التطبيق. جرّب تحديث الصفحة.</div>
+          </div>
+        `;
+      }
+    };
+    document.body.appendChild(s);
+  </script>
 </body>
 </html>
