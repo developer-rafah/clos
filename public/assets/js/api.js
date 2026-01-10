@@ -1,5 +1,7 @@
+// public/assets/js/api.js
+
 export async function apiGet(path) {
-  const res = await fetch(path, { method: "GET", cache: "no-store" });
+  const res = await fetch(path, { method: "GET", cache: "no-store", credentials: "include" });
   const data = await res.json().catch(() => ({}));
   if (!res.ok || data?.ok === false) throw new Error(data?.error || `HTTP ${res.status}`);
   return data;
@@ -9,6 +11,7 @@ export async function apiPost(path, body) {
   const res = await fetch(path, {
     method: "POST",
     cache: "no-store",
+    credentials: "include",
     headers: { "content-type": "application/json" },
     body: JSON.stringify(body ?? {}),
   });
