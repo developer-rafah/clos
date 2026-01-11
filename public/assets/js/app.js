@@ -1,176 +1,88 @@
-import { parseRoute, getRoute, goto, roleToHome } from "./router.js";
-import * as auth from "./auth.js";
-import { gas } from "./api.js";
-import { renderLogin, bindLogin, renderAgent, renderStaff, renderAdmin, renderHome } from "./ui.js";
+import { loadAppConfig } from "./app-config.js";
+import { me, login, logout } from "./auth.js";
+import { roleToHome, getRoute, goto } from "./router.js";
+import { renderLogin, bindLogin, renderHome } from "./ui.js";
+import { enablePush, getPushStatus } from "./push.js";
 
-const ROOT_ID = "app";
+const $app = document.getElementById("app");
+const $btnRefresh = document.getElementById("btnRefresh");
 
-function getRoot() {
-  const el = document.getElementById(ROOT_ID);
-  if (!el) throw new Error(`Missing #${ROOT_ID}`);
-  return el;
+function setHtml(html) {
+  $app.innerHTML = html;
 }
 
-let state = {
-  user: null,
-  tasks: [],
-  tasksError: "",
-  pushStatus: "غير مفعل",
-};
-
-function setView(html) {
-  getRoot().innerHTML = html;
-}
-
-async function enablePushSafe() {
-  alert("ميزة الإشعارات غير مفعلة حالياً (Firebase config ناقص).");
-}
-
-// ✅ helper: استخرج مصفوفة من أشكال ردود متعددة
-function extractArray(any) {
-  const candidates = [
-    any,
-    any?.items,
-    any?.data,
-    any?.tasks,
-    any?.requests,
-    any?.result,
-    any?.rows,
-  ];
-  return candidates.find(Array.isArray) || [];
-}
-
-async function loadAgentTasks() {
+async function boot() {
   try {
-    // هذا action محمي في GAS (ليس auth.* وليس donate) => يحتاج apiKey صحيح
-    const g = await gas("agent.tasks", { username: state.user?.username });
-
-    // ✅ إذا GAS رجّع Object وليس Array، استخرج المصفوفة
-    const tasks = extractArray(g);
-
-    state.tasks = tasks;
-    state.tasksError = "";
+    await loadAppConfig(); // تأكد config جاهز
   } catch (e) {
-    state.tasks = [];
-    state.tasksError = String(e?.message || e);
+    setHtml(`<div class="alert">فشل تحميل الإعدادات: ${String(e?.message || e)}</div>`);
+    return;
   }
-}
 
-function renderRoute() {
-  const route = parseRoute(getRoute());
-  const user = state.user;
-
-  // غير مسجل
+  const user = await me();
   if (!user) {
-    setView(renderLogin({ error: "" }));
-    bindLogin(getRoot(), async ({ username, password }) => {
-      try {
-        const u = await auth.login(username, password);
-        state.user = u;
-        goto(roleToHome(u?.role));
-      } catch (e) {
-        setView(renderLogin({ error: String(e?.message || e) }));
-        bindLogin(getRoot(), async ({ username, password }) => {
-          const u = await auth.login(username, password);
-          state.user = u;
-          goto(roleToHome(u?.role));
-        });
-      }
-    });
+    showLogin();
     return;
   }
 
-  // لو على root ودّه حسب الدور
-  if (route.name === "root" || route.name === "" || route.name === "login") {
-    goto(roleToHome(user?.role));
-    return;
-  }
-
-  // صفحات حسب المسار
-  if (route.name === "agent") {
-    setView(renderAgent({
-      user,
-      pushStatus: state.pushStatus,
-      tasks: state.tasks,
-      tasksError: state.tasksError,
-    }));
-    return;
-  }
-
-  if (route.name === "staff") {
-    setView(renderStaff({ user, pushStatus: state.pushStatus }));
-    return;
-  }
-
-  if (route.name === "admin") {
-    setView(renderAdmin({ user, pushStatus: state.pushStatus }));
-    return;
-  }
-
-  setView(renderHome({ user, pushStatus: state.pushStatus }));
+  // توجيه تلقائي حسب الدور
+  const r = getRoute();
+  if (r === "#/" || r === "" || r === "#") goto(roleToHome(user.role));
+  await renderForUser(user);
 }
 
-// ✅ Event delegation
-function wireGlobalClicks() {
-  const root = getRoot();
-  root.addEventListener("click", async (e) => {
-    const btn = e.target.closest("[data-action]");
-    if (!btn) return;
-
-    const action = btn.getAttribute("data-action");
-
+function showLogin(error = "") {
+  setHtml(renderLogin({ error, onSubmit: null }));
+  bindLogin($app, async ({ username, password }) => {
     try {
-      if (action === "auth.logout") {
-        await auth.logout();
-        state.user = null;
-        state.tasks = [];
-        state.tasksError = "";
-        goto("#/");
-        return;
-      }
-
-      if (action === "push.enable") {
-        await enablePushSafe();
-        return;
-      }
-
-      if (action === "agent.refresh") {
-        const fresh = await auth.me();
-        if (fresh) state.user = fresh;
-
-        await loadAgentTasks(); // يجلب المهام ويعرض الخطأ إن وجد
-        renderRoute();
-        return;
-      }
-
-      if (action === "agent.tasks") {
-        await loadAgentTasks();
-        renderRoute();
-        return;
-      }
-    } catch (err) {
-      state.tasksError = String(err?.message || err);
-      renderRoute();
+      const u = await login(username, password);
+      goto(roleToHome(u.role));
+      await renderForUser(u);
+    } catch (e) {
+      showLogin(e?.message || String(e));
     }
   });
 }
 
-async function boot() {
-  wireGlobalClicks();
+async function renderForUser(user) {
+  const pushStatus = await getPushStatus();
+  setHtml(renderHome({ user, pushStatus }));
 
-  state.user = await auth.me();
+  const btnLogout = $app.querySelector("#btnLogout");
+  const btnEnablePush = $app.querySelector("#btnEnablePush");
 
-  // تحميل مهام المندوب تلقائيًا
-  if (state.user?.role === "مندوب") {
-    await loadAgentTasks();
-  }
+  btnLogout.addEventListener("click", async () => {
+    // ✅ لا Logout إلا يدويًا
+    await logout();
+    location.hash = "#/";
+    showLogin("تم تسجيل الخروج.");
+  });
 
-  renderRoute();
+  btnEnablePush.addEventListener("click", async () => {
+    try {
+      btnEnablePush.disabled = true;
+      btnEnablePush.textContent = "جاري التفعيل...";
+      await enablePush();
+      await renderForUser(user);
+    } catch (e) {
+      btnEnablePush.disabled = false;
+      btnEnablePush.textContent = "تفعيل الإشعارات";
+      alert(e?.message || String(e));
+    }
+  });
 }
 
-window.addEventListener("hashchange", () => renderRoute());
-
-boot().catch((e) => {
-  console.error(e);
-  setView(`<div class="alert">خطأ في تشغيل التطبيق: ${String(e?.message || e)}</div>`);
+window.addEventListener("hashchange", async () => {
+  const user = await me();
+  if (!user) return showLogin();
+  await renderForUser(user);
 });
+
+$btnRefresh?.addEventListener("click", () => location.reload());
+
+// ✅ Register SW for offline + push
+if ("serviceWorker" in navigator) {
+  navigator.serviceWorker.register("/service-worker.js").catch(() => {});
+}
+
+boot();
