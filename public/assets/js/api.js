@@ -1,58 +1,46 @@
 import { getToken } from "./auth.js";
 
-/**
- * نعتبر النجاح إذا:
- * - HTTP OK
- * - و (ok !== false) و (success !== false)
- */
-function assertOk(res, data) {
-  const okFlag = (data?.ok !== false) && (data?.success !== false);
-  if (!res.ok || !okFlag) {
-    throw new Error(data?.error || data?.message || `HTTP ${res.status}`);
-  }
-  return data;
-}
-
-function buildAuthHeaders(extra = {}) {
-  const token = getToken();
-  const h = { ...extra };
-
-  // ✅ أرسل Authorization إذا فيه token (مفيد لـ /api/auth/*)
-  if (token) h["Authorization"] = `Bearer ${token}`;
-
-  return h;
+async function parseJsonSafe(res) {
+  const txt = await res.text().catch(() => "");
+  if (!txt) return {};
+  try { return JSON.parse(txt); } catch { return { raw: txt }; }
 }
 
 export async function apiGet(path) {
-  const res = await fetch(path, {
-    method: "GET",
-    cache: "no-store",
-    headers: buildAuthHeaders(),
-  });
-
-  const data = await res.json().catch(() => ({}));
-  return assertOk(res, data);
+  const res = await fetch(path, { method: "GET", cache: "no-store" });
+  const data = await parseJsonSafe(res);
+  if (!res.ok || data?.ok === false || data?.success === false) {
+    throw new Error(data?.error || `HTTP ${res.status}`);
+  }
+  return data;
 }
 
 export async function apiPost(path, body) {
   const res = await fetch(path, {
     method: "POST",
     cache: "no-store",
-    headers: buildAuthHeaders({ "content-type": "application/json" }),
+    headers: { "content-type": "application/json" },
     body: JSON.stringify(body ?? {}),
   });
 
-  const data = await res.json().catch(() => ({}));
-  return assertOk(res, data);
+  const data = await parseJsonSafe(res);
+
+  // دعم شكلين للرد:
+  // 1) { success:true, ... }  من GAS مباشرة
+  // 2) { ok:true, gas:{ success:true, ... } } من وسيط /api/gas
+  const ok1 = (res.ok && data?.ok !== false && data?.success !== false);
+  if (!ok1) throw new Error(data?.error || `HTTP ${res.status}`);
+
+  return data;
 }
 
-/**
- * Proxy to GAS عبر /api/gas
- * ✅ نرسل { action, payload, token }
- * ✅ ونرجع الاستجابة كاملة كما هي (بدون out.gas)
- */
-export async function gas(action, payload = {}) {
+/** Proxy to GAS */
+export async function gas(action, payload) {
   const token = getToken();
+  if (!token) throw new Error("Unauthorized: missing token (not saved)");
+
   const out = await apiPost("/api/gas", { action, payload, token });
-  return out; // ✅ مهم جداً
+
+  // لو الوسيط يرجع { gas: {...} } رجّعها، وإلا رجّع out نفسه
+  return out?.gas ?? out;
 }
