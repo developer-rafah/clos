@@ -19,22 +19,35 @@ let state = {
 };
 
 function setView(html) {
-  const root = getRoot();
-  root.innerHTML = html;
+  getRoot().innerHTML = html;
 }
 
 async function enablePushSafe() {
   alert("ميزة الإشعارات غير مفعلة حالياً (Firebase config ناقص).");
 }
 
+// ✅ helper: استخرج مصفوفة من أشكال ردود متعددة
+function extractArray(any) {
+  const candidates = [
+    any,
+    any?.items,
+    any?.data,
+    any?.tasks,
+    any?.requests,
+    any?.result,
+    any?.rows,
+  ];
+  return candidates.find(Array.isArray) || [];
+}
+
 async function loadAgentTasks() {
   try {
-    // ✅ غيّر اسم الأكشن حسب الموجود عندك في Google Apps Script
-    // ابدأ بهذا، وإن لم يعطِ بيانات، سنبدله حسب أكشنات GAS عندك:
-    const data = await gas("agent.tasks", { username: state.user?.username });
+    // هذا action محمي في GAS (ليس auth.* وليس donate) => يحتاج apiKey صحيح
+    const g = await gas("agent.tasks", { username: state.user?.username });
 
-    // نتوقع أن GAS يرجّع array أو {items:[]}
-    const tasks = Array.isArray(data) ? data : (Array.isArray(data?.items) ? data.items : []);
+    // ✅ إذا GAS رجّع Object وليس Array، استخرج المصفوفة
+    const tasks = extractArray(g);
+
     state.tasks = tasks;
     state.tasksError = "";
   } catch (e) {
@@ -47,6 +60,7 @@ function renderRoute() {
   const route = parseRoute(getRoute());
   const user = state.user;
 
+  // غير مسجل
   if (!user) {
     setView(renderLogin({ error: "" }));
     bindLogin(getRoot(), async ({ username, password }) => {
@@ -96,7 +110,7 @@ function renderRoute() {
   setView(renderHome({ user, pushStatus: state.pushStatus }));
 }
 
-// ✅ Event delegation: حدث واحد فقط لكل الأزرار
+// ✅ Event delegation
 function wireGlobalClicks() {
   const root = getRoot();
   root.addEventListener("click", async (e) => {
@@ -121,11 +135,10 @@ function wireGlobalClicks() {
       }
 
       if (action === "agent.refresh") {
-        // تحديث بيانات المستخدم من السيرفر
         const fresh = await auth.me();
         if (fresh) state.user = fresh;
-        // اختياري: مع التحديث نجلب المهام أيضًا
-        await loadAgentTasks();
+
+        await loadAgentTasks(); // يجلب المهام ويعرض الخطأ إن وجد
         renderRoute();
         return;
       }
@@ -136,7 +149,6 @@ function wireGlobalClicks() {
         return;
       }
     } catch (err) {
-      // عرض الخطأ داخل صفحة المندوب بدل الصمت
       state.tasksError = String(err?.message || err);
       renderRoute();
     }
@@ -146,10 +158,9 @@ function wireGlobalClicks() {
 async function boot() {
   wireGlobalClicks();
 
-  // حمّل المستخدم إن كان مسجل
   state.user = await auth.me();
 
-  // لو مندوب، حاول تحميل المهام تلقائيًا (اختياري)
+  // تحميل مهام المندوب تلقائيًا
   if (state.user?.role === "مندوب") {
     await loadAgentTasks();
   }
