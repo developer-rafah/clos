@@ -14,7 +14,11 @@ export async function onRequestPost({ request, env }) {
     if (!action) return fail("Missing action", 400);
 
     // donate + auth.* public
-    const isPublic = action === "donate" || action.startsWith("auth.");
+    const isPublic =
+  action === "donate" ||
+  action.startsWith("auth.") ||
+  action.startsWith("agent."); // ✅ token-protected in GAS
+
 
     const url = new URL(GAS_URL);
     url.searchParams.set("action", action);
