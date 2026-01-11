@@ -42,12 +42,17 @@ function extractArray(any) {
 
 async function loadAgentTasks() {
   try {
-    // هذا action محمي في GAS (ليس auth.* وليس donate) => يحتاج apiKey صحيح
-    const g = await gas("agent.tasks", { username: state.user?.username });
+    // ✅ opts اختيارية
+    const data = await gas("agent.tasks", {
+      status: "assigned",   // أو "closed"
+      area: "",
+      q: "",
+      from: "",
+      to: ""
+    });
 
-    // ✅ إذا GAS رجّع Object وليس Array، استخرج المصفوفة
-    const tasks = extractArray(g);
-
+    // agent_getRequests_secure يرجع {success:true, data:[...]}
+    const tasks = Array.isArray(data?.data) ? data.data : [];
     state.tasks = tasks;
     state.tasksError = "";
   } catch (e) {
@@ -55,6 +60,7 @@ async function loadAgentTasks() {
     state.tasksError = String(e?.message || e);
   }
 }
+
 
 function renderRoute() {
   const route = parseRoute(getRoute());
