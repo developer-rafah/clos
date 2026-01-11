@@ -74,6 +74,68 @@
       });
     }
 
+    /* =========================================================
+     * ✅✅✅ NEW: Capture token from URL/Hash and save in THIS domain
+     * - حل جذري لمشكلة أن login في GAS يخزن في نطاق مختلف
+     * - يعتمد على نفس auth.js للحفاظ على الأصل
+     * ========================================================= */
+    async function captureTokenToStorage() {
+      try {
+        // نستخدم auth.js حتى نخزن بنفس طريقتك الأصلية
+        const mod = await import("/assets/js/auth.js");
+        const setToken = mod?.setToken;
+
+        const href = String(location.href || "");
+        const u = new URL(href);
+
+        // 1) token من query ?token=
+        let token = String(u.searchParams.get("token") || "").trim();
+
+        // 2) token من hash query #/agent?token=
+        if (!token && location.hash && location.hash.includes("?")) {
+          const parts = location.hash.split("?");
+          const queryRaw = parts[1] || "";
+          const hp = new URLSearchParams(queryRaw);
+          token = String(hp.get("token") || "").trim();
+        }
+
+        if (token) {
+          // خزنه في هذا النطاق (clos.rafah.org.sa)
+          if (typeof setToken === "function") setToken(token);
+          else {
+            // fallback (لو auth.js ما توفر)
+            try { sessionStorage.setItem("AUTH_TOKEN", token); } catch {}
+            try { sessionStorage.setItem("auth_token", token); } catch {}
+            try { localStorage.setItem("AUTH_TOKEN", token); } catch {}
+            try { localStorage.setItem("auth_token", token); } catch {}
+          }
+
+          // ✅ نظف الرابط: احذف token بدون ريفرش
+          try {
+            // احذف من query
+            if (u.searchParams.has("token")) {
+              u.searchParams.delete("token");
+              history.replaceState({}, "", u.toString());
+            }
+
+            // احذف من hash query
+            if (location.hash && location.hash.includes("token=")) {
+              const [path, q] = location.hash.split("?");
+              const hp2 = new URLSearchParams(q || "");
+              if (hp2.has("token")) hp2.delete("token");
+              const newHash = hp2.toString() ? (path + "?" + hp2.toString()) : path;
+
+              const cleanUrl = u.origin + u.pathname + u.search + newHash;
+              history.replaceState({}, "", cleanUrl);
+            }
+          } catch {}
+        }
+      } catch {}
+    }
+
+    // ✅ نفذ الالتقاط قبل تحميل التطبيق
+    await captureTokenToStorage();
+
     // تحميل app.js مع معالجة فشل التحميل بشكل واضح للمستخدم
     const s = document.createElement("script");
     s.type = "module";
