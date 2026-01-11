@@ -11,6 +11,9 @@ import {
   renderHome,
 } from "./ui.js";
 
+// ✅ ربط الإشعارات الحقيقي
+import { enablePush, getPushStatus } from "./push.js";
+
 // مكان عرض الواجهة
 const ROOT_ID = "app";
 
@@ -20,14 +23,45 @@ function getRoot() {
   return el;
 }
 
-/**
- * Stub بسيط للإشعارات (عشان ما يوقف التطبيق لو Firebase ناقص)
- * لاحقًا تقدر تربطه بـ push.js
- */
-async function enablePushSafe() {
+async function computePushStatusText() {
   try {
-    alert("ميزة الإشعارات غير مفعلة بعد (تحتاج Firebase config).");
-  } catch {}
+    return await getPushStatus();
+  } catch (e) {
+    // لو صار خطأ غير متوقع، لا نوقف الواجهة
+    return "—";
+  }
+}
+
+function mapPushErrorToMessage(e) {
+  const msg = String(e?.message || e || "");
+
+  // أهم الحالات المتوقعة في مشروعك:
+  if (msg.includes("HTTP 401") || msg.toLowerCase().includes("unauthorized")) {
+    return "لازم تسجّل دخول أولًا لتفعيل الإشعارات.";
+  }
+  if (msg.includes("تم رفض إذن الإشعارات")) {
+    return "تم رفض الإشعارات من المتصفح. فعّلها من إعدادات الموقع ثم جرّب مرة أخرى.";
+  }
+  if (msg.includes("Service Worker غير مدعوم")) {
+    return "متصفحك لا يدعم Service Worker، لذلك الإشعارات غير مدعومة.";
+  }
+  if (msg.includes("Firebase config ناقص")) {
+    return "إعدادات Firebase ناقصة. تأكد أن /app-config.json يحتوي القيم المطلوبة.";
+  }
+  if (msg.includes("لم يتم الحصول على FCM token")) {
+    return "فشل الحصول على توكن الإشعارات. جرّب تحديث الصفحة أو إعادة تفعيل الإشعارات.";
+  }
+
+  return msg || "حدث خطأ أثناء تفعيل الإشعارات.";
+}
+
+async function onEnablePushClicked() {
+  try {
+    await enablePush();
+    alert("تم تفعيل الإشعارات ✅");
+  } catch (e) {
+    alert(mapPushErrorToMessage(e));
+  }
 }
 
 function bindCommonButtons(root) {
@@ -39,7 +73,10 @@ function bindCommonButtons(root) {
 
   const btnEnablePush = root.querySelector("#btnEnablePush");
   btnEnablePush?.addEventListener("click", async () => {
-    await enablePushSafe();
+    await onEnablePushClicked();
+
+    // بعد المحاولة، نعيد الرسم لتحديث حالة pushStatus في الواجهة
+    await renderApp();
   });
 }
 
@@ -49,8 +86,8 @@ function enforceRoleAccess(user, routeName) {
   // من له صلاحية الدخول لأي صفحة؟
   const allow = {
     admin: role === "مدير",
-    staff: role === "موظف" || role === "مدير", // المدير ممكن يشوفها
-    agent: role === "مندوب" || role === "مدير", // المدير ممكن يشوفها
+    staff: role === "موظف" || role === "مدير",
+    agent: role === "مندوب" || role === "مدير",
   };
 
   if (routeName === "admin" && !allow.admin) return false;
@@ -60,24 +97,26 @@ function enforceRoleAccess(user, routeName) {
   return true;
 }
 
-function renderByRoute(root, user, routeName) {
+async function renderByRoute(root, user, routeName) {
   // حماية صلاحيات
   if (!enforceRoleAccess(user, routeName)) {
-    // ارجعه للصفحة المناسبة لدوره
     goto(roleToHome(user?.role));
     return;
   }
 
+  // ✅ حالة الإشعارات الحقيقية
+  const pushStatus = await computePushStatusText();
+
   // عرض حسب المسار
   if (routeName === "agent") {
-    root.innerHTML = renderAgent({ user, pushStatus: "غير مفعل" });
+    root.innerHTML = renderAgent({ user, pushStatus });
     bindCommonButtons(root);
 
     root.querySelector("#btnAgentRefresh")?.addEventListener("click", async () => {
-      // مثال: تحديث user من السيرفر
       const fresh = await auth.me();
       if (fresh) {
-        root.innerHTML = renderAgent({ user: fresh, pushStatus: "غير مفعل" });
+        const ps = await computePushStatusText();
+        root.innerHTML = renderAgent({ user: fresh, pushStatus: ps });
         bindCommonButtons(root);
       }
     });
@@ -86,13 +125,14 @@ function renderByRoute(root, user, routeName) {
   }
 
   if (routeName === "staff") {
-    root.innerHTML = renderStaff({ user, pushStatus: "غير مفعل" });
+    root.innerHTML = renderStaff({ user, pushStatus });
     bindCommonButtons(root);
 
     root.querySelector("#btnStaffRefresh")?.addEventListener("click", async () => {
       const fresh = await auth.me();
       if (fresh) {
-        root.innerHTML = renderStaff({ user: fresh, pushStatus: "غير مفعل" });
+        const ps = await computePushStatusText();
+        root.innerHTML = renderStaff({ user: fresh, pushStatus: ps });
         bindCommonButtons(root);
       }
     });
@@ -101,7 +141,7 @@ function renderByRoute(root, user, routeName) {
   }
 
   if (routeName === "admin") {
-    root.innerHTML = renderAdmin({ user, pushStatus: "غير مفعل" });
+    root.innerHTML = renderAdmin({ user, pushStatus });
     bindCommonButtons(root);
 
     root.querySelector("#btnAdminUsers")?.addEventListener("click", () => {
@@ -112,7 +152,7 @@ function renderByRoute(root, user, routeName) {
   }
 
   // fallback: الصفحة العامة
-  root.innerHTML = renderHome({ user, pushStatus: "غير مفعل" });
+  root.innerHTML = renderHome({ user, pushStatus });
   bindCommonButtons(root);
 }
 
@@ -148,7 +188,7 @@ async function renderApp() {
   }
 
   // 4) ارسم الصفحة المطلوبة
-  renderByRoute(root, user, route.name);
+  await renderByRoute(root, user, route.name);
 }
 
 window.addEventListener("hashchange", () => {
