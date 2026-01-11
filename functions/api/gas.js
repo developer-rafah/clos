@@ -13,12 +13,16 @@ export async function onRequestPost({ request, env }) {
 
     if (!action) return fail("Missing action", 400);
 
-    // donate عادة يكون public — لا نرسل apiKey
+    // donate + auth.* public
     const isPublic = action === "donate" || action.startsWith("auth.");
 
     const url = new URL(GAS_URL);
     url.searchParams.set("action", action);
-    if (!isPublic) url.searchParams.set("apiKey", GAS_API_KEY);
+
+    if (!isPublic) {
+      if (!GAS_API_KEY) return fail("GAS_API_KEY is not set", 500);
+      url.searchParams.set("apiKey", GAS_API_KEY);
+    }
 
     const res = await fetch(url.toString(), {
       method: "POST",
@@ -35,6 +39,13 @@ export async function onRequestPost({ request, env }) {
     }
 
     if (!res.ok) return fail(`GAS HTTP ${res.status}`, 502, { gas: data });
+
+    // ✅ إذا GAS رجّع ok:false / success:false اعتبره خطأ
+    if (data && typeof data === "object") {
+      if (data.ok === false || data.success === false) {
+        return fail(data.error || "GAS error", 502, { gas: data });
+      }
+    }
 
     return ok({ gas: data });
   } catch (e) {
