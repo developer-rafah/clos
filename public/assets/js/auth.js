@@ -1,30 +1,38 @@
-// auth.js
+import { apiGet, apiPost } from "./api.js";
 
-const KEYS = ["AUTH_TOKEN", "auth_token"];
+const LS_ME = "CLOS_ME_V1";
+const LS_TOKEN = "CLOS_TOKEN_V1";
 
 export function getToken() {
-  for (const k of KEYS) {
-    const v =
-      (sessionStorage.getItem(k) || "").trim() ||
-      (localStorage.getItem(k) || "").trim();
-    if (v) return v;
-  }
-  return "";
+  return String(localStorage.getItem(LS_TOKEN) || "");
 }
 
-export function setToken(token) {
-  token = String(token || "").trim();
-  if (!token) return;
-  // احفظ في الاثنين للتوافق مع ملفاتك الحالية
-  try { sessionStorage.setItem("AUTH_TOKEN", token); } catch {}
-  try { sessionStorage.setItem("auth_token", token); } catch {}
-  try { localStorage.setItem("AUTH_TOKEN", token); } catch {}
-  try { localStorage.setItem("auth_token", token); } catch {}
+export async function login(username, password) {
+  const out = await apiPost("/api/auth/login", { username, password });
+
+  if (out?.token) localStorage.setItem(LS_TOKEN, String(out.token));
+  localStorage.setItem(LS_ME, JSON.stringify(out.user || null));
+
+  return out.user;
 }
 
-export function clearToken() {
-  for (const k of KEYS) {
-    try { sessionStorage.removeItem(k); } catch {}
-    try { localStorage.removeItem(k); } catch {}
+export async function me() {
+  try {
+    const out = await apiGet("/api/auth/me");
+    if (out?.token) localStorage.setItem(LS_TOKEN, String(out.token));
+    localStorage.setItem(LS_ME, JSON.stringify(out.user || null));
+    return out.user;
+  } catch {
+    const raw = localStorage.getItem(LS_ME);
+    if (raw) {
+      try { return JSON.parse(raw); } catch {}
+    }
+    return null;
   }
+}
+
+export async function logout() {
+  try { await apiPost("/api/auth/logout", {}); } catch {}
+  localStorage.removeItem(LS_ME);
+  localStorage.removeItem(LS_TOKEN);
 }
