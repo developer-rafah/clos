@@ -76,36 +76,70 @@ function renderTopBar({ user }) {
   `;
 }
 
-export function renderAgent({ user, pushStatus = "" } = {}) {
-  return renderShell(`
-    ${renderTopBar({ user })}
+export function renderAgent({ user, pushStatus = "", tasks = [], tasksError = "" } = {}) {
+  const role = escapeHtml(user?.role || "");
+  const name = escapeHtml(user?.name || user?.username || "");
 
-    <div class="hr"></div>
+  const tasksHtml = tasksError
+    ? `<div class="alert">${escapeHtml(tasksError)}</div>`
+    : (!tasks || tasks.length === 0)
+      ? `<div class="muted">لا توجد مهام حالياً (أو لم يتم جلبها بعد).</div>`
+      : `
+        <div class="list">
+          ${tasks.map((t) => `
+            <div class="list__item">
+              <div class="row" style="justify-content:space-between;gap:10px;align-items:center;">
+                <div>
+                  <div class="strong">${escapeHtml(t.title ?? t.name ?? "مهمة")}</div>
+                  <div class="small muted">${escapeHtml(t.status ?? t.state ?? "")}</div>
+                </div>
+                <div class="pill">${escapeHtml(t.id ?? t.code ?? "")}</div>
+              </div>
+            </div>
+          `).join("")}
+        </div>
+      `;
 
-    <h2 class="h2">لوحة المندوب</h2>
-    <div class="muted">هنا تظهر مهام المندوب (مثال: زيارات، تسليمات، تقارير...)</div>
+  return `
+    <div>
+      <div class="row" style="justify-content:space-between;align-items:center;gap:12px;">
+        <div>
+          <h1 class="h1">مرحبًا ${name}</h1>
+          <div class="muted">الدور: <span class="pill">${role}</span></div>
+        </div>
 
-    <div class="hr"></div>
-
-    <div class="row" style="gap:10px;flex-wrap:wrap;">
-      <button id="btnAgentRefresh" class="btn" type="button">تحديث البيانات</button>
-      <button id="btnAgentTasks" class="btn btn--ghost" type="button">عرض المهام</button>
-    </div>
-
-    <div class="hr"></div>
-
-    <div class="row">
-      <div class="col">
-        <div class="pill">🔔 الإشعارات</div>
-        <div class="small" style="margin-top:10px;">${escapeHtml(pushStatus || "—")}</div>
+        <div class="row" style="gap:10px;flex-wrap:wrap;">
+          <button class="btn btn--ghost" type="button" data-action="push.enable">تفعيل الإشعارات</button>
+          <button class="btn btn--danger" type="button" data-action="auth.logout">تسجيل الخروج</button>
+        </div>
       </div>
-      <div class="col">
-        <div class="pill">📍 مثال</div>
-        <div class="small" style="margin-top:10px;">يمكنك إضافة خرائط/تتبع/زر بدء زيارة...</div>
+
+      <div class="hr"></div>
+
+      <h2 class="h2">لوحة المندوب</h2>
+      <div class="muted">هنا تظهر مهام المندوب (طلبات/زيارات/تسليمات...)</div>
+
+      <div class="hr"></div>
+
+      <div class="row" style="gap:10px;flex-wrap:wrap;">
+        <button class="btn" type="button" data-action="agent.refresh">تحديث البيانات</button>
+        <button class="btn btn--ghost" type="button" data-action="agent.tasks">عرض المهام</button>
       </div>
+
+      <div class="hr"></div>
+
+      <div id="agentTasks">
+        ${tasksHtml}
+      </div>
+
+      <div class="hr"></div>
+
+      <div class="pill">🔔 الإشعارات</div>
+      <div class="small" style="margin-top:10px;">${escapeHtml(pushStatus || "—")}</div>
     </div>
-  `);
+  `;
 }
+
 
 export function renderStaff({ user, pushStatus = "" } = {}) {
   return renderShell(`
