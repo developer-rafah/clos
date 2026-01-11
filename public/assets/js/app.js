@@ -29,19 +29,29 @@ async function enablePushSafe() {
 
 async function loadAgentTasks() {
   try {
-    // ✅ غيّر اسم الأكشن حسب الموجود عندك في Google Apps Script
-    // ابدأ بهذا، وإن لم يعطِ بيانات، سنبدله حسب أكشنات GAS عندك:
     const data = await gas("agent.tasks", { username: state.user?.username });
 
-    // نتوقع أن GAS يرجّع array أو {items:[]}
-    const tasks = Array.isArray(data) ? data : (Array.isArray(data?.items) ? data.items : []);
-    state.tasks = tasks;
+    // ✅ GAS قد يرجّع البيانات داخل عدة مفاتيح محتملة
+    const candidates = [
+      data,                 // لو رجّع array مباشرة
+      data?.items,
+      data?.data,
+      data?.tasks,
+      data?.requests,
+      data?.result,
+      data?.rows,
+    ];
+
+    const arr = candidates.find(Array.isArray) || [];
+
+    state.tasks = arr;
     state.tasksError = "";
   } catch (e) {
     state.tasks = [];
     state.tasksError = String(e?.message || e);
   }
 }
+
 
 function renderRoute() {
   const route = parseRoute(getRoute());
