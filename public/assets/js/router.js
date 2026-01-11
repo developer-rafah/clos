@@ -14,8 +14,9 @@ export function getRoute() {
 }
 
 export function goto(hash) {
-  if (location.hash === hash) return;
-  location.hash = hash;
+  const target = String(hash || "#/").trim();
+  if (location.hash === target) return;
+  location.hash = target;
 }
 
 /**
