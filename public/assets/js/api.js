@@ -23,5 +23,16 @@ export async function apiPost(path, body) {
 /** Proxy to GAS (hide GAS_URL) */
 export async function gas(action, payload) {
   const out = await apiPost("/api/gas", { action, payload });
-  return out?.gas;
+
+  // ✅ Cloudflare يرجع ok:true حتى لو GAS فشل.
+  // هنا نفحص نتيجة GAS نفسها:
+  const g = out?.gas;
+
+  if (g && typeof g === "object") {
+    if (g.ok === false || g.success === false) {
+      throw new Error(g.error || "GAS returned an error");
+    }
+  }
+
+  return g;
 }
