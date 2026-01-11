@@ -1,7 +1,5 @@
-// public/assets/js/api.js
-
 export async function apiGet(path) {
-  const res = await fetch(path, { method: "GET", cache: "no-store", credentials: "include" });
+  const res = await fetch(path, { method: "GET", cache: "no-store" });
   const data = await res.json().catch(() => ({}));
   if (!res.ok || data?.ok === false) throw new Error(data?.error || `HTTP ${res.status}`);
   return data;
@@ -11,7 +9,6 @@ export async function apiPost(path, body) {
   const res = await fetch(path, {
     method: "POST",
     cache: "no-store",
-    credentials: "include",
     headers: { "content-type": "application/json" },
     body: JSON.stringify(body ?? {}),
   });
@@ -23,16 +20,5 @@ export async function apiPost(path, body) {
 /** Proxy to GAS (hide GAS_URL) */
 export async function gas(action, payload) {
   const out = await apiPost("/api/gas", { action, payload });
-
-  // ✅ Cloudflare يرجع ok:true حتى لو GAS فشل.
-  // هنا نفحص نتيجة GAS نفسها:
-  const g = out?.gas;
-
-  if (g && typeof g === "object") {
-    if (g.ok === false || g.success === false) {
-      throw new Error(g.error || "GAS returned an error");
-    }
-  }
-
-  return g;
+  return out?.gas;
 }
