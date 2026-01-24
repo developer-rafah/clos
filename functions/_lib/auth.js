@@ -1,54 +1,39 @@
-// functions/_lib/auth.js
-import { unauthorized, forbidden, serverError } from "./response.js";
-import { getTokenFromRequest, verifyJwtHS256 } from "./jwt.js";
+import { unauthorized, serverError } from "./response.js";
+import { getCookie } from "./security.js";
+import { verifyJwt } from "./jwt.js";
 
-function norm(s) {
-  return String(s || "").trim();
+export const COOKIE_NAME = "clos_session";
+
+function getTokenFromRequest(request) {
+  const auth = request.headers.get("authorization") || "";
+  if (auth.startsWith("Bearer ")) return auth.slice(7).trim();
+
+  const cookieToken = getCookie(request, COOKIE_NAME);
+  if (cookieToken) return cookieToken;
+
+  return "";
 }
 
-function normRole(s) {
-  return norm(s).toLowerCase();
-}
+export async function requireAuth(request, env) {
+  const secret = String(env.JWT_SECRET || env.AUTH_JWT_SECRET || "").trim();
+  if (!secret) return { user: null, errorResponse: serverError("JWT_SECRET missing in env") };
 
-function normalizeRoles(roles) {
-  if (!roles) return null;
-  if (Array.isArray(roles)) return roles.map(normRole).filter(Boolean);
-  if (typeof roles === "string") return [normRole(roles)];
-  return null;
-}
-
-/**
- * ✅ يدعم Bearer + Cookie (clos_session/clos_token)
- * ✅ يقرأ السر من JWT_SECRET ثم AUTH_JWT_SECRET للتوافق
- * يرجّع: { user } أو { errorResponse }
- */
-export async function requireAuth(request, env, { roles = null } = {}) {
   const token = getTokenFromRequest(request);
-  if (!token) return { errorResponse: unauthorized("Unauthorized") };
+  if (!token) return { user: null, errorResponse: unauthorized("Missing session token") };
 
-  const secret = norm(env.JWT_SECRET || env.AUTH_JWT_SECRET);
-  if (!secret) return { errorResponse: serverError("Missing JWT_SECRET (or AUTH_JWT_SECRET)") };
+  const v = await verifyJwt(token, secret);
+  if (!v.ok) return { user: null, errorResponse: unauthorized("Session invalid/expired") };
 
-  const payload = await verifyJwtHS256(token, secret);
-  if (!payload) return { errorResponse: unauthorized("Unauthorized") };
-
+  const p = v.payload || {};
   const user = {
-    token,
-    username: norm(payload.username || payload.user || payload.sub),
-    role: norm(payload.role),
-    name: norm(payload.name || payload.full_name || payload.username || payload.sub),
-    userId: norm(payload.userId || payload.id || payload.username || payload.sub),
-    raw: payload,
+    username: String(p.username || p.user || "").trim(),
+    name: String(p.name || p.full_name || "").trim(),
+    role: String(p.role || "").trim(),
   };
 
   if (!user.username || !user.role) {
-    return { errorResponse: unauthorized("Token missing username/role") };
+    return { user: null, errorResponse: unauthorized("Token missing user fields") };
   }
 
-  const allow = normalizeRoles(roles);
-  if (allow && !allow.includes(normRole(user.role))) {
-    return { errorResponse: forbidden("ليس لديك صلاحية") };
-  }
-
-  return { user };
+  return { user, token, errorResponse: null };
 }
