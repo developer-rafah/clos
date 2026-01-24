@@ -30,11 +30,8 @@ export async function onRequestGet({ request, env }) {
     const status = String(url.searchParams.get("status") || "").trim();
     const q = String(url.searchParams.get("q") || "").trim();
 
-    // تحديد الفلاتر حسب الدور
-    // الأدوار عندك: "مدير" / "موظف" / "مندوب"
     const role = user.role;
 
-    // select
     const columns = [
       "id",
       "customer_name",
@@ -56,41 +53,31 @@ export async function onRequestGet({ request, env }) {
       "updated_at",
     ].join(",");
 
-    // base filters
     const filters = [];
 
-    // status filter (اختياري)
-    if (status) {
-      filters.push(`status=eq.${encodeURIComponent(status)}`);
-    }
+    if (status) filters.push(`status=eq.${encodeURIComponent(status)}`);
 
-    // q filter بسيط (إما phone أو customer_name)
-    // PostgREST OR: or=(customer_name.ilike.*x*,phone.ilike.*x*)
     if (q) {
-      const qEsc = q.replace(/\*/g, ""); // حماية
-      filters.push(`or=(${[
-        `customer_name.ilike.*${encodeURIComponent(qEsc)}*`,
-        `phone.ilike.*${encodeURIComponent(qEsc)}*`,
-        `id.ilike.*${encodeURIComponent(qEsc)}*`,
-      ].join(",")})`);
+      const qEsc = q.replace(/\*/g, "");
+      filters.push(
+        `or=(${[
+          `customer_name.ilike.*${encodeURIComponent(qEsc)}*`,
+          `phone.ilike.*${encodeURIComponent(qEsc)}*`,
+          `id.ilike.*${encodeURIComponent(qEsc)}*`,
+        ].join(",")})`
+      );
     }
 
-    // role filters
     if (role === "مندوب") {
-      // يرى طلباته فقط
       filters.push(`agent_username=eq.${encodeURIComponent(user.username)}`);
     } else if (role === "موظف") {
-      // الافتراضي: يعرض "جديد" فقط إن لم يحدد status
-      if (!status) {
-        filters.push(`status=eq.${encodeURIComponent("جديد")}`);
-      }
+      if (!status) filters.push(`status=eq.${encodeURIComponent("جديد")}`);
     } else if (role === "مدير") {
       // كل شيء
     } else {
       return badRequest("Unknown role: " + role);
     }
 
-    // pagination + ordering
     const query = [
       `select=${encodeURIComponent(columns)}`,
       ...filters,
