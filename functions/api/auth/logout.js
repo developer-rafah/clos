@@ -1,13 +1,19 @@
-import { json, fail } from "../../_lib/response.js";
+import { json, serverError } from "../../_lib/response.js";
 import { clearCookie } from "../../_lib/security.js";
-
-const COOKIE_NAME = "clos_session";
+import { COOKIE_NAME } from "../../_lib/auth.js";
 
 export async function onRequestPost() {
   try {
-    return json({ ok: true, success: true }, 200, { "set-cookie": clearCookie(COOKIE_NAME) });
+    return json(
+      { ok: true, success: true },
+      {
+        status: 200,
+        headers: {
+          "set-cookie": clearCookie(COOKIE_NAME, { path: "/" }),
+        },
+      }
+    );
   } catch (e) {
-    return fail(e?.message || String(e), 500);
+    return serverError(e);
   }
 }
-
