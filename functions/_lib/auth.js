@@ -57,8 +57,8 @@ export async function requireAuth(request, env, { roles = null } = {}) {
 
   if (!token) return { errorResponse: unauthorized("Missing Bearer token") };
 
-  const secret = String(env.AUTH_JWT_SECRET || "").trim();
-  if (!secret) return { errorResponse: unauthorized("AUTH_JWT_SECRET not set") };
+  const secret = String(env.JWT_SECRET || env.AUTH_JWT_SECRET || "").trim();
+if (!secret) return { errorResponse: unauthorized("Missing JWT secret (JWT_SECRET)") };
 
   let payload;
   try {
