@@ -1,24 +1,13 @@
-export function constantTimeEqual(a, b) {
-  const aa = String(a ?? "");
-  const bb = String(b ?? "");
-  if (aa.length !== bb.length) return false;
-
-  let out = 0;
-  for (let i = 0; i < aa.length; i++) out |= aa.charCodeAt(i) ^ bb.charCodeAt(i);
-  return out === 0;
-}
-
-export function parseCookies(header) {
+export function parseCookies(cookieHeader) {
   const out = {};
-  const h = String(header || "");
-  if (!h) return out;
+  const s = String(cookieHeader || "");
+  if (!s) return out;
 
-  h.split(";").forEach((part) => {
-    const idx = part.indexOf("=");
-    if (idx === -1) return;
-    const k = part.slice(0, idx).trim();
-    const v = part.slice(idx + 1).trim();
-    if (!k) return;
+  s.split(";").forEach((part) => {
+    const i = part.indexOf("=");
+    if (i === -1) return;
+    const k = part.slice(0, i).trim();
+    const v = part.slice(i + 1).trim();
     out[k] = decodeURIComponent(v);
   });
 
@@ -26,28 +15,48 @@ export function parseCookies(header) {
 }
 
 export function getCookie(request, name) {
-  const cookies = parseCookies(request.headers.get("cookie"));
-  return cookies[name] ?? null;
+  const cookies = parseCookies(request.headers.get("Cookie"));
+  return cookies[name];
 }
 
-export function setCookie(name, value, opts = {}) {
+export function buildSetCookie(name, value, opts = {}) {
   const {
-    maxAge,
     path = "/",
     httpOnly = true,
     secure = true,
     sameSite = "Lax",
-    domain,
+    maxAge, // seconds
+    expires, // Date
   } = opts;
 
-  let s = `${name}=${encodeURIComponent(value)}; Path=${path}; SameSite=${sameSite}`;
-  if (typeof maxAge === "number") s += `; Max-Age=${Math.floor(maxAge)}`;
-  if (domain) s += `; Domain=${domain}`;
-  if (httpOnly) s += `; HttpOnly`;
-  if (secure) s += `; Secure`;
-  return s;
+  let cookie = `${name}=${encodeURIComponent(value)}; Path=${path}; SameSite=${sameSite}`;
+  if (httpOnly) cookie += "; HttpOnly";
+  if (secure) cookie += "; Secure";
+  if (typeof maxAge === "number") cookie += `; Max-Age=${maxAge}`;
+  if (expires instanceof Date) cookie += `; Expires=${expires.toUTCString()}`;
+  return cookie;
 }
 
 export function clearCookie(name, opts = {}) {
-  return setCookie(name, "", { ...opts, maxAge: 0 });
+  return buildSetCookie(name, "", {
+    ...opts,
+    maxAge: 0,
+    expires: new Date(0),
+  });
+}
+
+export function constantTimeEqual(a, b) {
+  const aa = String(a || "");
+  const bb = String(b || "");
+  if (aa.length !== bb.length) return false;
+  let out = 0;
+  for (let i = 0; i < aa.length; i++) out |= aa.charCodeAt(i) ^ bb.charCodeAt(i);
+  return out === 0;
+}
+
+export async function sha256Hex(text) {
+  const enc = new TextEncoder().encode(String(text || ""));
+  const hash = await crypto.subtle.digest("SHA-256", enc);
+  const bytes = new Uint8Array(hash);
+  return Array.from(bytes).map((b) => b.toString(16).padStart(2, "0")).join("");
 }
