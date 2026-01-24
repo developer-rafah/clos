@@ -1,46 +1,59 @@
-import { json, fail } from "../../_lib/response.js";
-import { getUserByUsername } from "../../_lib/supabase.js";
-import { constantTimeEqual, setCookie } from "../../_lib/security.js";
+import { json, badRequest, unauthorized, serverError } from "../../_lib/response.js";
+import { setCookie, constantTimeEqual } from "../../_lib/security.js";
 import { signJwt } from "../../_lib/jwt.js";
+import { getUserByUsername } from "../../_lib/supabase.js";
+import { COOKIE_NAME } from "../../_lib/auth.js";
 
-const COOKIE_NAME = "clos_session";
+const SESSION_TTL_SEC = 60 * 60 * 24 * 14;
 
 export async function onRequestPost({ request, env }) {
   try {
-    const JWT_SECRET = String(env.JWT_SECRET || "").trim();
-    if (!JWT_SECRET) return fail("Missing JWT_SECRET", 500);
+    const secret = String(env.JWT_SECRET || env.AUTH_JWT_SECRET || "").trim();
+    if (!secret) return serverError("JWT_SECRET missing in env");
 
-    const body = await request.json().catch(() => ({}));
-    const username = String(body.username || body.user || "").trim();
-    const password = String(body.password || body.pass || "").trim();
+    const body = await request.json().catch(() => null);
+    if (!body) return badRequest("Invalid JSON body");
 
-    if (!username || !password) return fail("Missing credentials", 400);
+    const username = String(body.username || "").trim();
+    const password = String(body.password || "").trim();
+    if (!username || !password) return badRequest("Missing username/password");
 
-    const u = await getUserByUsername(env, username);
-    if (!u) return fail("بيانات الدخول غير صحيحة", 401);
-    if (u.active === false) return fail("الحساب غير مفعل", 403);
+    const row = await getUserByUsername(env, username);
+    if (!row) return unauthorized("Invalid credentials");
 
-    const dbPass = String(u.password || "").trim();
-    if (!dbPass || !constantTimeEqual(dbPass, password)) return fail("بيانات الدخول غير صحيحة", 401);
+    if (row.active === false) return unauthorized("User disabled");
+
+    const dbPass = String(row.password || "").trim();
+    if (!constantTimeEqual(dbPass, password)) return unauthorized("Invalid credentials");
 
     const user = {
-      username: String(u.username || username),
-      name: String(u.full_name || u.username || username),
-      role: String(u.role || ""),
+      username: String(row.username || username).trim(),
+      name: String(row.full_name || row.username || username).trim(),
+      role: String(row.role || "").trim(),
     };
 
-    const token = await signJwt(
-      { sub: user.username, username: user.username, name: user.name, role: user.role },
-      JWT_SECRET,
-      { expSec: 60 * 60 * 24 * 14 }
-    );
+    if (!user.role) return serverError("User role missing in DB");
+
+    const token = await signJwt(user, secret, { expSec: SESSION_TTL_SEC });
+
+    const cookie = setCookie(COOKIE_NAME, token, {
+      maxAge: SESSION_TTL_SEC,
+      httpOnly: true,
+      secure: true,
+      sameSite: "Lax",
+      path: "/",
+    });
 
     return json(
-      { ok: true, success: true, user, token },
-      200,
-      { "set-cookie": setCookie(COOKIE_NAME, token, { maxAge: 60 * 60 * 24 * 14 }) }
+      {
+        ok: true,
+        success: true,
+        user,
+        token,
+      },
+      { status: 200, headers: { "set-cookie": cookie } }
     );
   } catch (e) {
-    return fail(e?.message || String(e), 500);
+    return serverError(e);
   }
 }
