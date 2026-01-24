@@ -1,46 +1,53 @@
+export function constantTimeEqual(a, b) {
+  const aa = String(a ?? "");
+  const bb = String(b ?? "");
+  if (aa.length !== bb.length) return false;
+
+  let out = 0;
+  for (let i = 0; i < aa.length; i++) out |= aa.charCodeAt(i) ^ bb.charCodeAt(i);
+  return out === 0;
+}
+
+export function parseCookies(header) {
+  const out = {};
+  const h = String(header || "");
+  if (!h) return out;
+
+  h.split(";").forEach((part) => {
+    const idx = part.indexOf("=");
+    if (idx === -1) return;
+    const k = part.slice(0, idx).trim();
+    const v = part.slice(idx + 1).trim();
+    if (!k) return;
+    out[k] = decodeURIComponent(v);
+  });
+
+  return out;
+}
+
 export function getCookie(request, name) {
-  const cookie = request.headers.get("cookie") || "";
-  const parts = cookie.split(";").map((s) => s.trim());
-  for (const p of parts) {
-    if (!p) continue;
-    const i = p.indexOf("=");
-    if (i < 0) continue;
-    const k = p.slice(0, i).trim();
-    const v = p.slice(i + 1).trim();
-    if (k === name) return decodeURIComponent(v);
-  }
-  return "";
+  const cookies = parseCookies(request.headers.get("cookie"));
+  return cookies[name] ?? null;
 }
 
 export function setCookie(name, value, opts = {}) {
   const {
+    maxAge,
+    path = "/",
     httpOnly = true,
     secure = true,
     sameSite = "Lax",
-    path = "/",
-    maxAge = 60 * 60 * 24 * 14, // 14 days
+    domain,
   } = opts;
 
-  const parts = [
-    `${name}=${encodeURIComponent(value)}`,
-    `Path=${path}`,
-    `SameSite=${sameSite}`,
-    `Max-Age=${maxAge}`,
-  ];
-  if (httpOnly) parts.push("HttpOnly");
-  if (secure) parts.push("Secure");
-  return parts.join("; ");
+  let s = `${name}=${encodeURIComponent(value)}; Path=${path}; SameSite=${sameSite}`;
+  if (typeof maxAge === "number") s += `; Max-Age=${Math.floor(maxAge)}`;
+  if (domain) s += `; Domain=${domain}`;
+  if (httpOnly) s += `; HttpOnly`;
+  if (secure) s += `; Secure`;
+  return s;
 }
 
-export function clearCookie(name) {
-  return `${name}=; Path=/; Max-Age=0; SameSite=Lax; HttpOnly; Secure`;
-}
-
-export function constantTimeEqual(a, b) {
-  a = String(a ?? "");
-  b = String(b ?? "");
-  if (a.length !== b.length) return false;
-  let out = 0;
-  for (let i = 0; i < a.length; i++) out |= a.charCodeAt(i) ^ b.charCodeAt(i);
-  return out === 0;
+export function clearCookie(name, opts = {}) {
+  return setCookie(name, "", { ...opts, maxAge: 0 });
 }
