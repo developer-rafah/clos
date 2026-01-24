@@ -1,124 +1,133 @@
-// functions/api/gas/[[path]].js
-function normalizePathParam(pathParam) {
-  if (Array.isArray(pathParam)) return pathParam.join("/");
-  return String(pathParam || "").trim();
+import { json, fail } from "../../_lib/response.js";
+
+function corsHeaders(req) {
+  const origin = req.headers.get("Origin") || "*";
+  return {
+    "access-control-allow-origin": origin === "null" ? "*" : origin,
+    "access-control-allow-methods": "GET,POST,OPTIONS",
+    "access-control-allow-headers": "Content-Type, Authorization, X-Requested-With",
+    "access-control-allow-credentials": "true",
+    vary: "Origin",
+  };
 }
 
-function actionFromPath(path) {
+function normalizeActionFromPath(path) {
   return String(path || "")
+    .trim()
     .replace(/^\/+/, "")
     .replace(/\/+$/, "")
     .replace(/\//g, ".");
 }
 
-function corsHeaders() {
-  return {
-    "access-control-allow-origin": "*",
-    "access-control-allow-methods": "GET,POST,OPTIONS",
-    "access-control-allow-headers": "content-type,authorization",
-    "cache-control": "no-store",
-  };
-}
-
-export async function onRequestOptions() {
-  return new Response(null, { status: 204, headers: corsHeaders() });
-}
-
 async function fetchWithManualRedirect(url, init, maxHops = 4) {
   let currentUrl = url;
-  let hops = 0;
+  let currentInit = { ...init, redirect: "manual" };
 
-  while (true) {
-    const res = await fetch(currentUrl, { ...init, redirect: "manual" });
+  for (let i = 0; i <= maxHops; i++) {
+    const res = await fetch(currentUrl, currentInit);
 
     if (![301, 302, 303, 307, 308].includes(res.status)) return res;
-
-    if (hops >= maxHops) {
-      return new Response(JSON.stringify({ ok: false, error: "Too many redirects from upstream" }), {
-        status: 502,
-        headers: { ...corsHeaders(), "content-type": "application/json; charset=utf-8" },
-      });
-    }
 
     const loc = res.headers.get("location");
     if (!loc) return res;
 
-    currentUrl = new URL(loc, currentUrl).toString();
-    hops++;
+    const next = new URL(loc, currentUrl).toString();
+
+    // نحافظ على الـ body (حتى لو 302/303) عشان GAS أحياناً يعيد توجيه
+    currentUrl = next;
   }
+
+  throw new Error("Too many redirects while proxying to GAS");
 }
 
-function tryExtractActionFromBody(bodyBuf, contentType) {
-  const ct = String(contentType || "").toLowerCase();
-  if (!bodyBuf || !ct.includes("application/json")) return "";
-
-  try {
-    const text = new TextDecoder("utf-8").decode(bodyBuf);
-    const obj = JSON.parse(text);
-    return String(obj?.action || "").trim();
-  } catch {
-    return "";
-  }
+export async function onRequestOptions({ request }) {
+  return new Response(null, { status: 204, headers: corsHeaders(request) });
 }
 
 export async function onRequest({ request, env, params }) {
   try {
-    // دعم الاسمين لتفادي اختلافاتك بين Worker/Pages
-    const gasUrl = String(env.GAS_EXEC_URL || env.GAS_URL || "").trim();
-    if (!gasUrl) {
-      return new Response(JSON.stringify({ ok: false, error: "GAS_EXEC_URL/GAS_URL is not set" }), {
+    const GAS_EXEC_URL = String(env.GAS_EXEC_URL || env.GAS_URL || "").trim();
+    if (!GAS_EXEC_URL) {
+      return new Response(JSON.stringify({ ok: false, success: false, error: "Missing GAS_EXEC_URL/GAS_URL" }), {
         status: 500,
-        headers: { ...corsHeaders(), "content-type": "application/json; charset=utf-8" },
+        headers: { ...corsHeaders(request), "content-type": "application/json; charset=utf-8" },
       });
     }
 
-    const incomingUrl = new URL(request.url);
-    const path = normalizePathParam(params.path);
-    const pathAction = actionFromPath(path);
-
-    // اقرأ body مرة واحدة (مهم)
-    const ct = request.headers.get("content-type") || "application/json";
-    let bodyBuf = undefined;
-    if (!["GET", "HEAD"].includes(request.method)) {
-      bodyBuf = await request.arrayBuffer();
+    // GET للـ health/debug
+    if (request.method === "GET") {
+      return new Response(
+        JSON.stringify({ ok: true, success: true, service: "gas-proxy", hint: "Use POST with JSON {action, ...}" }),
+        { status: 200, headers: { ...corsHeaders(request), "content-type": "application/json; charset=utf-8" } }
+      );
     }
 
-    // لو المسار /api/gas (بدون لاحقة) نستخرج action من query أو من body
-    const qAction = String(incomingUrl.searchParams.get("action") || "").trim();
-    const bodyAction = tryExtractActionFromBody(bodyBuf, ct);
-    const action = pathAction || qAction || bodyAction;
-
-    const target = new URL(gasUrl);
-    if (action) target.searchParams.set("action", action);
-
-    // مرّر أي query أخرى للـ GAS
-    for (const [k, v] of incomingUrl.searchParams.entries()) {
-      target.searchParams.set(k, v);
+    if (request.method !== "POST") {
+      return new Response(JSON.stringify({ ok: false, success: false, error: "Method not allowed" }), {
+        status: 405,
+        headers: { ...corsHeaders(request), "content-type": "application/json; charset=utf-8" },
+      });
     }
 
-    const headers = new Headers();
-    headers.set("content-type", ct);
+    const body = await request.json().catch(() => ({}));
 
+    const path = params?.path; // optional catch-all
+    const actionFromPath = path ? normalizeActionFromPath(path) : "";
+    const action = String(body.action || actionFromPath || "").trim();
+
+    if (!action) {
+      return new Response(JSON.stringify({ ok: false, success: false, error: "Missing action" }), {
+        status: 400,
+        headers: { ...corsHeaders(request), "content-type": "application/json; charset=utf-8" },
+      });
+    }
+
+    // actions لا تحتاج apiKey
+    const isTokenOnly =
+      action === "donate" ||
+      action.startsWith("auth.") ||
+      action.startsWith("agent.");
+
+    const GAS_API_KEY = String(env.GAS_API_KEY || "").trim();
+    if (!isTokenOnly && GAS_API_KEY) {
+      body.apiKey = body.apiKey || GAS_API_KEY;
+    }
+
+    // نبني target
+    const target = new URL(GAS_EXEC_URL);
+    target.searchParams.set("action", action);
+
+    // نرسل wrapper كامل (مثل Worker)
+    const outBody = { ...body, action };
+
+    // لازم نقرأ body مرة واحدة — هنا خلاص عندنا JSON جاهز
     const init = {
-      method: request.method,
-      headers,
-      body: bodyBuf,
+      method: "POST",
+      headers: { "content-type": "application/json", "cache-control": "no-store" },
+      body: JSON.stringify(outBody),
+      redirect: "manual",
     };
 
     const upstream = await fetchWithManualRedirect(target.toString(), init, 4);
-    const text = await upstream.text();
+    const text = await upstream.text().catch(() => "");
 
-    return new Response(text, {
-      status: upstream.status,
-      headers: {
-        ...corsHeaders(),
-        "content-type": upstream.headers.get("content-type") || "application/json; charset=utf-8",
-      },
-    });
+    let gasPayload;
+    try {
+      gasPayload = text ? JSON.parse(text) : {};
+    } catch {
+      gasPayload = { raw: text || "" };
+    }
+
+    const ok = upstream.ok && gasPayload?.ok !== false && gasPayload?.success !== false;
+
+    return new Response(
+      JSON.stringify({ ok, success: ok, status: upstream.status, gas: gasPayload }),
+      {
+        status: 200,
+        headers: { ...corsHeaders(request), "content-type": "application/json; charset=utf-8", "cache-control": "no-store" },
+      }
+    );
   } catch (e) {
-    return new Response(JSON.stringify({ ok: false, error: e?.message || String(e) }), {
-      status: 502,
-      headers: { ...corsHeaders(), "content-type": "application/json; charset=utf-8" },
-    });
+    return fail("Upstream error: " + (e?.message || String(e)), 502);
   }
 }
