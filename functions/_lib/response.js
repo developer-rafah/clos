@@ -1,4 +1,4 @@
-export function json(data, status = 200, headers = {}) {
+export function json(data, { status = 200, headers = {} } = {}) {
   return new Response(JSON.stringify(data, null, 2), {
     status,
     headers: {
@@ -9,21 +9,19 @@ export function json(data, status = 200, headers = {}) {
   });
 }
 
-export function ok(data = {}) {
-  return json({ ok: true, success: true, ...data }, 200);
+export function badRequest(message, extra = {}) {
+  return json({ ok: false, success: false, error: message, ...extra }, { status: 400 });
 }
 
-export function fail(message, status = 400, extra = {}) {
-  return json({ ok: false, success: false, error: String(message || "Error"), ...extra }, status);
+export function unauthorized(message = "Unauthorized", extra = {}) {
+  return json({ ok: false, success: false, error: message, ...extra }, { status: 401 });
 }
 
-export function text(body, status = 200, headers = {}) {
-  return new Response(body, {
-    status,
-    headers: {
-      "content-type": "text/plain; charset=utf-8",
-      "cache-control": "no-store",
-      ...headers,
-    },
-  });
+export function forbidden(message = "Forbidden", extra = {}) {
+  return json({ ok: false, success: false, error: message, ...extra }, { status: 403 });
+}
+
+export function serverError(err, extra = {}) {
+  const msg = err?.message ? String(err.message) : String(err);
+  return json({ ok: false, success: false, error: msg, ...extra }, { status: 500 });
 }
