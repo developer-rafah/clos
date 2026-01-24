@@ -1,8 +1,12 @@
-function normalizeActionFromPath(path) {
-  // path مثل: "auth/login" => "auth.login"
-  // أو: "requests/list" => "requests.list"
+function normalizePathParam(pathParam) {
+  // Cloudflare قد يمرر params.path كسلسلة أو كمصفوفة
+  if (Array.isArray(pathParam)) return pathParam.join("/");
+  return String(pathParam || "").trim();
+}
+
+function actionFromPath(path) {
+  // "auth/login" => "auth.login"
   return String(path || "")
-    .trim()
     .replace(/^\/+/, "")
     .replace(/\/+$/, "")
     .replace(/\//g, ".");
@@ -21,6 +25,36 @@ export async function onRequestOptions() {
   return new Response(null, { status: 204, headers: withCors() });
 }
 
+async function fetchWithManualRedirect(url, init, maxHops = 3) {
+  // نمنع auto-follow لأننا نحتاج نحافظ على body
+  let currentUrl = url;
+  let hops = 0;
+
+  while (true) {
+    const res = await fetch(currentUrl, { ...init, redirect: "manual" });
+
+    // ليس redirect
+    if (![301, 302, 303, 307, 308].includes(res.status)) return res;
+
+    if (hops >= maxHops) {
+      return new Response(
+        JSON.stringify({ ok: false, error: "Too many redirects from upstream" }),
+        { status: 502, headers: withCors({ "content-type": "application/json; charset=utf-8" }) }
+      );
+    }
+
+    const loc = res.headers.get("location");
+    if (!loc) return res;
+
+    // GAS يعطينا location نسبي/مطلق
+    const next = new URL(loc, currentUrl).toString();
+
+    // ⚠️ مهم: نُبقي نفس method ونفس body (حتى لو 302/303)
+    currentUrl = next;
+    hops++;
+  }
+}
+
 export async function onRequest({ request, env, params }) {
   try {
     const gasUrl = (env.GAS_URL || "").trim();
@@ -31,40 +65,40 @@ export async function onRequest({ request, env, params }) {
       });
     }
 
-    const path = params.path || "";
-    const action = normalizeActionFromPath(path);
-
-    const url = new URL(gasUrl);
-    // نمرر action عبر Query
-    url.searchParams.set("action", action);
-
-    // نمرر أي query params من /api?... إلى GAS أيضاً
     const incomingUrl = new URL(request.url);
+
+    const path = normalizePathParam(params.path);
+    const action = actionFromPath(path);
+
+    const target = new URL(gasUrl);
+    target.searchParams.set("action", action);
+
+    // تمرير query parameters إلى GAS
     for (const [k, v] of incomingUrl.searchParams.entries()) {
-      url.searchParams.set(k, v);
+      target.searchParams.set(k, v);
     }
 
-    // تجهيز headers
-    const reqHeaders = new Headers();
-    reqHeaders.set("content-type", request.headers.get("content-type") || "application/json");
+    // headers الأساسية (نقل Content-Type فقط يكفي عادة)
+    const headers = new Headers();
+    const ct = request.headers.get("content-type") || "application/json";
+    headers.set("content-type", ct);
 
-    // ✅ حل مشكلة one-time body مع redirect: اقرأ body كـ buffer
-    let bodyBuf = null;
-    if (request.method !== "GET" && request.method !== "HEAD") {
-      // مهم: نحول الـ stream إلى buffer
+    // ✅ اقرأ body مرة واحدة كـ buffer لإعادة استخدامه بعد redirect
+    let bodyBuf = undefined;
+    if (!["GET", "HEAD"].includes(request.method)) {
       bodyBuf = await request.arrayBuffer();
     }
 
-    const upstream = await fetch(url.toString(), {
+    const init = {
       method: request.method,
-      headers: reqHeaders,
+      headers,
       body: bodyBuf,
-      redirect: "follow",
-    });
+    };
+
+    const upstream = await fetchWithManualRedirect(target.toString(), init, 4);
 
     const text = await upstream.text();
 
-    // مرر status و body كما هي
     return new Response(text, {
       status: upstream.status,
       headers: withCors({
