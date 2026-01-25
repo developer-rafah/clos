@@ -77,3 +77,4 @@ async function boot() {
 document.addEventListener("DOMContentLoaded", () => {
   boot().catch((e) => renderError(e?.message || String(e)));
 });
+
