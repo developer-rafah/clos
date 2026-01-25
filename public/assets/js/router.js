@@ -1,42 +1,41 @@
 // public/assets/js/router.js
-// Simple hash router: #/login, #/agent, #/staff, #/admin
+import { getToken } from "./api.js";
 
-export function getRoute() {
-  const h = String(location.hash || "").trim();
-  // supports "#/agent" or "#agent"
-  const cleaned = h.replace(/^#\/?/, "");
-  return cleaned || "login";
+let _handlers = new Map();
+
+export function on(route, handler, { auth = false } = {}) {
+  _handlers.set(route, { handler, auth });
+}
+
+export function currentRoute() {
+  const h = location.hash || "#/"; // مثال: #/agent
+  return h.startsWith("#") ? h : `#${h}`;
 }
 
 export function go(route) {
-  const r = String(route || "").trim() || "login";
-  location.hash = `#/${r}`;
+  if (!route.startsWith("#")) route = `#${route}`;
+  location.hash = route;
 }
 
-export function roleToHome(role) {
-  const r = String(role || "").trim();
-
-  // عدّلها حسب أدوارك الفعلية
-  if (r === "مندوب") return "agent";
-  if (r === "موظف") return "staff";
-  if (r === "مدير" || r === "مشرف" || r === "Admin") return "admin";
-
-  return "login";
+export async function start() {
+  window.addEventListener("hashchange", () => void dispatch());
+  await dispatch();
 }
 
-export function guardRoute(route, me) {
-  // routes that require login
-  const protectedRoutes = new Set(["agent", "staff", "admin"]);
+export async function dispatch() {
+  const route = currentRoute();
+  const hit = _handlers.get(route) || _handlers.get("#/") || null;
 
-  if (!protectedRoutes.has(route)) return { ok: true };
+  if (!hit) return;
 
-  if (!me) return { ok: false, redirect: "login" };
+  if (hit.auth) {
+    const token = getToken();
+    if (!token) {
+      // لا يوجد توكن -> حوّل للدخول
+      location.hash = "#/login";
+      return;
+    }
+  }
 
-  // role-based protection
-  if (route === "agent" && me.role !== "مندوب") return { ok: false, redirect: roleToHome(me.role) };
-  if (route === "staff" && me.role !== "موظف") return { ok: false, redirect: roleToHome(me.role) };
-  if (route === "admin" && !(me.role === "مدير" || me.role === "مشرف" || me.role === "Admin"))
-    return { ok: false, redirect: roleToHome(me.role) };
-
-  return { ok: true };
+  await hit.handler();
 }
