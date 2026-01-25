@@ -1,4 +1,4 @@
-import { ok, badRequest, serverError } from "../../_lib/response.js";
+import { ok, badRequest, serverError, forbidden } from "../../_lib/response.js";
 import { requireAuth } from "../../_lib/auth.js";
 import { sbFetch } from "../../_lib/supabase.js";
 
@@ -13,12 +13,42 @@ function parseCount(contentRange) {
   return m ? parseInt(m[1], 10) : null;
 }
 
+/**
+ * ✅ تطبيع الأدوار:
+ * - يدعم العربي/الإنجليزي ويحوّلها لقيم ثابتة: agent | staff | admin
+ */
+function normalizeRole(roleRaw) {
+  const r = String(roleRaw || "").trim().toLowerCase();
+
+  // English
+  if (r === "admin") return "admin";
+  if (r === "staff") return "staff";
+  if (r === "agent") return "agent";
+
+  // Arabic common
+  if (roleRaw === "مشرف" || roleRaw === "مدير") return "admin";
+  if (roleRaw === "موظف" || roleRaw === "ستاف") return "staff";
+  if (roleRaw === "مندوب") return "agent";
+
+  return r; // fallback
+}
+
 // GET /api/requests
 // filters: status, q, area_code, limit, offset, select
 export async function onRequestGet({ request, env }) {
-  const auth = await requireAuth(request, env, { roles: ["agent", "staff", "admin"] });
+  // ✅ لا تقيّد roles هنا بالقيم الإنجليزية فقط
+  // نسمح بالمندوب/الموظف/المشرف أيضًا، ثم نطبّع الدور
+  const auth = await requireAuth(request, env);
   if (auth.errorResponse) return auth.errorResponse;
+
   const user = auth.user;
+  const role = normalizeRole(user.role);
+
+  // ✅ تحقق صلاحية الوصول
+  if (!["agent", "staff", "admin"].includes(role)) {
+    // Forbidden أدق من badRequest هنا
+    return forbidden("Forbidden");
+  }
 
   const url = new URL(request.url);
 
@@ -37,14 +67,14 @@ export async function onRequestGet({ request, env }) {
   query.push(`offset=${offset}`);
 
   // role filters
-  if (user.role === "agent") {
+  if (role === "agent") {
     query.push(`agent_username=eq.${encodeURIComponent(user.username)}`);
-  } else if (user.role === "staff") {
+  } else if (role === "staff") {
     const ac = area_code || user.area_code;
     if (!ac) return badRequest("Missing area_code for staff user (token must include area_code)");
     query.push(`area_code=eq.${encodeURIComponent(ac)}`);
-  } else if (user.role !== "admin") {
-    return badRequest("Invalid role");
+  } else if (role !== "admin") {
+    return forbidden("Forbidden");
   }
 
   // extra filters
@@ -53,9 +83,7 @@ export async function onRequestGet({ request, env }) {
   if (q) {
     // بحث في donor_name أو phone (حسب الموجود في مشروعك)
     const safe = q.replace(/[%]/g, "\\%").replace(/_/g, "\\_");
-    query.push(
-      `or=(${encodeURIComponent(`donor_name.ilike.*${safe}*,phone.ilike.*${safe}*`)})`
-    );
+    query.push(`or=(${encodeURIComponent(`donor_name.ilike.*${safe}*,phone.ilike.*${safe}*`)})`);
   }
 
   const path = `/rest/v1/requests?${query.join("&")}`;
@@ -80,7 +108,6 @@ export async function onRequestGet({ request, env }) {
   return ok({
     items: Array.isArray(out.data) ? out.data : [],
     pagination: { limit, offset, count },
-    role: user.role,
+    role, // ✅ الدور بعد التطبيع
   });
 }
-
