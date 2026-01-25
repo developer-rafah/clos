@@ -1,137 +1,132 @@
 /**
  * api.js
- * واجهة موحدة للتعامل مع API + GAS
- * متوافق مع Cloudflare Pages + JWT في LocalStorage
+ * - إرسال Bearer Token تلقائيًا من localStorage
+ * - دعم GAS proxy
+ * - توفير دوال global للتجربة في console
  */
 
-/* =========================
-   أدوات مساعدة
-========================= */
-
 async function parseJsonSafe(res) {
-  const text = await res.text().catch(() => "");
-  if (!text) return {};
+  const txt = await res.text().catch(() => "");
+  if (!txt) return {};
   try {
-    return JSON.parse(text);
+    return JSON.parse(txt);
   } catch {
-    return { raw: text };
+    return { raw: txt };
   }
 }
 
 /**
- * استخراج التوكن بشكل موحّد
- * المصدر المعتمد: localStorage فقط (واضح + ثابت)
+ * ✅ يقرأ التوكن من CLOS_TOKEN_V1
+ * يدعم:
+ * - token string مباشرة
+ * - أو JSON مثل {"token":"..."} أو {"access_token":"..."}
  */
 function getToken() {
   try {
-    return String(localStorage.getItem("CLOS_TOKEN_V1") || "").trim();
+    const raw = String(localStorage.getItem("CLOS_TOKEN_V1") || "").trim();
+    if (!raw) return "";
+
+    // لو كان JSON
+    if ((raw.startsWith("{") && raw.endsWith("}")) || (raw.startsWith("[") && raw.endsWith("]"))) {
+      try {
+        const obj = JSON.parse(raw);
+        return String(obj?.token || obj?.access_token || obj?.jwt || "").trim();
+      } catch {
+        // لو فشل parse اعتبره نص
+        return raw;
+      }
+    }
+
+    // نص مباشر
+    return raw;
   } catch {
     return "";
   }
 }
 
-/* =========================
-   طلبات API عامة
-========================= */
+function withAuthHeaders(extraHeaders = {}, needsJson = false, auth = false) {
+  const headers = new Headers(extraHeaders);
 
-export async function apiGet(path, { auth = false } = {}) {
-  const headers = {};
+  if (needsJson && !headers.has("content-type")) {
+    headers.set("content-type", "application/json");
+  }
 
   if (auth) {
     const token = getToken();
-    if (!token) throw new Error("Unauthorized: missing token");
-    headers["authorization"] = `Bearer ${token}`;
+    if (!token) throw new Error("Unauthorized: missing token (CLOS_TOKEN_V1 is empty)");
+    headers.set("authorization", `Bearer ${token}`);
   }
 
+  return headers;
+}
+
+function throwIfNotOk(res, data) {
+  if (!res.ok || data?.ok === false || data?.success === false) {
+    const deeper = data?.gas?.error || data?.gas?.message;
+    throw new Error(deeper || data?.error || `HTTP ${res.status}`);
+  }
+}
+
+/** ✅ GET */
+export async function apiGet(path, { auth = false, headers = {} } = {}) {
   const res = await fetch(path, {
     method: "GET",
-    headers,
-    credentials: "include",
     cache: "no-store",
+    credentials: "include",
+    headers: withAuthHeaders(headers, false, auth),
   });
 
   const data = await parseJsonSafe(res);
-
-  if (!res.ok || data?.ok === false || data?.success === false) {
-    throw new Error(data?.error || `HTTP ${res.status}`);
-  }
-
+  throwIfNotOk(res, data);
   return data;
 }
 
-export async function apiPost(path, body = {}, { auth = false } = {}) {
-  const headers = {
-    "content-type": "application/json",
-  };
-
-  if (auth) {
-    const token = getToken();
-    if (!token) throw new Error("Unauthorized: missing token");
-    headers["authorization"] = `Bearer ${token}`;
-  }
-
+/** ✅ POST */
+export async function apiPost(path, body = {}, { auth = false, headers = {} } = {}) {
   const res = await fetch(path, {
     method: "POST",
-    headers,
-    credentials: "include",
     cache: "no-store",
-    body: JSON.stringify(body),
+    credentials: "include",
+    headers: withAuthHeaders(headers, true, auth),
+    body: JSON.stringify(body ?? {}),
   });
 
   const data = await parseJsonSafe(res);
-
-  if (!res.ok || data?.ok === false || data?.success === false) {
-    throw new Error(data?.error || `HTTP ${res.status}`);
-  }
-
+  throwIfNotOk(res, data);
   return data;
 }
 
-/* =========================
-   GAS Proxy
-========================= */
-
-/**
- * gas(action, payload)
- * - auth.* و donate → بدون توكن
- * - غير ذلك → يتطلب JWT
- */
+/** ✅ GAS proxy */
 export async function gas(action, payload = {}) {
   action = String(action || "").trim();
   if (!action) throw new Error("Missing action");
 
-  const isPublic =
-    action === "donate" ||
-    action.startsWith("auth.");
+  const isPublic = action === "donate" || action.startsWith("auth.");
 
-  const body = {
-    action,
-    payload,
-  };
+  const body = { action, payload };
 
+  // بعض أكشنز GAS تحتاج token داخل body
   if (!isPublic) {
     const token = getToken();
-    if (!token) throw new Error("Unauthorized: missing token");
+    if (!token) throw new Error("Unauthorized: missing token (CLOS_TOKEN_V1 is empty)");
     body.token = token;
   }
 
-  const res = await apiPost("/api/gas", body);
+  const out = await apiPost("/api/gas", body, { auth: false });
+  return out?.gas ?? out;
+}
 
-  // Cloudflare Worker يعيد { ok, success, gas }
-  return res?.gas ?? res;
+/** ✅ تشخيص سريع */
+export function __debugToken() {
+  return getToken();
 }
 
 /* =========================
-   أدوات مساعدة اختيارية
+   ✅ اجعلها متاحة في console
 ========================= */
-
-/** حفظ التوكن بعد login */
-export function saveToken(token) {
-  if (!token) return;
-  localStorage.setItem("CLOS_TOKEN_V1", token);
-}
-
-/** حذف التوكن عند logout */
-export function clearToken() {
-  localStorage.removeItem("CLOS_TOKEN_V1");
+if (typeof window !== "undefined") {
+  window.apiGet = apiGet;
+  window.apiPost = apiPost;
+  window.gas = gas;
+  window.__debugToken = __debugToken;
 }
