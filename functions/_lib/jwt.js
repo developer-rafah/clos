@@ -74,3 +74,4 @@ export async function verifyJwt(token, secret) {
     return { ok: false, error: e?.message || String(e) };
   }
 }
+
