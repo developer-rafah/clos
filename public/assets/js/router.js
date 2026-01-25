@@ -1,42 +1,41 @@
 // public/assets/js/router.js
-import { getToken } from "./api.js";
 
-let _handlers = new Map();
-
-export function on(route, handler, { auth = false } = {}) {
-  _handlers.set(route, { handler, auth });
+export function roleToHome(role) {
+  const r = String(role || "").trim();
+  if (r === "مدير") return "#/admin";
+  if (r === "موظف") return "#/staff";
+  if (r === "مندوب") return "#/agent";
+  return "#/staff";
 }
 
-export function currentRoute() {
-  const h = location.hash || "#/"; // مثال: #/agent
-  return h.startsWith("#") ? h : `#${h}`;
+export function getRoute() {
+  const h = location.hash || "#/";
+  return h === "#" ? "#/" : h;
 }
 
-export function go(route) {
-  if (!route.startsWith("#")) route = `#${route}`;
-  location.hash = route;
+export function goto(hash) {
+  const target = String(hash || "#/").trim() || "#/";
+  if (location.hash === target) return;
+  location.hash = target;
 }
 
-export async function start() {
-  window.addEventListener("hashchange", () => void dispatch());
-  await dispatch();
-}
+/**
+ * "#/"            => { name:"root",  path:"/" }
+ * "#/login"       => { name:"login", path:"/login" }
+ * "#/agent?id=1"  => { name:"agent", path:"/agent", query:{id:"1"} }
+ */
+export function parseRoute(hash = getRoute()) {
+  const h = String(hash || "#/").trim();
+  const noHash = h.startsWith("#") ? h.slice(1) : h;
+  const [pathRaw, queryRaw] = noHash.split("?");
+  const path = pathRaw || "/";
+  const name = path === "/" ? "root" : path.replace(/^\//, "").split("/")[0] || "root";
 
-export async function dispatch() {
-  const route = currentRoute();
-  const hit = _handlers.get(route) || _handlers.get("#/") || null;
-
-  if (!hit) return;
-
-  if (hit.auth) {
-    const token = getToken();
-    if (!token) {
-      // لا يوجد توكن -> حوّل للدخول
-      location.hash = "#/login";
-      return;
-    }
+  const query = {};
+  if (queryRaw) {
+    const params = new URLSearchParams(queryRaw);
+    for (const [k, v] of params.entries()) query[k] = v;
   }
 
-  await hit.handler();
+  return { name, path, query, hash: h };
 }
-
