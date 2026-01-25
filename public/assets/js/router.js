@@ -9,21 +9,15 @@ export function roleToHome(role) {
 }
 
 export function getRoute() {
-  const h = location.hash || "#/";
-  return h === "#" ? "#/" : h;
+  return location.hash || "#/";
 }
 
 export function goto(hash) {
-  const target = String(hash || "#/").trim() || "#/";
+  const target = String(hash || "#/").trim();
   if (location.hash === target) return;
   location.hash = target;
 }
 
-/**
- * "#/"            => { name:"root",  path:"/" }
- * "#/login"       => { name:"login", path:"/login" }
- * "#/agent?id=1"  => { name:"agent", path:"/agent", query:{id:"1"} }
- */
 export function parseRoute(hash = getRoute()) {
   const h = String(hash || "#/").trim();
   const noHash = h.startsWith("#") ? h.slice(1) : h;
