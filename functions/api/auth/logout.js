@@ -9,3 +9,4 @@ export async function onRequestPost() {
     { "set-cookie": clearCookie(COOKIE_NAME, { path: "/" }) }
   );
 }
+
