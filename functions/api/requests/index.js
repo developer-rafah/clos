@@ -83,3 +83,4 @@ export async function onRequestGet({ request, env }) {
     role: user.role,
   });
 }
+
