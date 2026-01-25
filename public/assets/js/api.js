@@ -12,30 +12,65 @@ async function parseJsonSafe(res) {
 
 /** ✅ توكن متوافق مع كل الإصدارات (يحُل مشكلة null) */
 function getTokenCompat() {
+  // 1) من auth.js
   try {
-    const t1 = (typeof getTokenFromAuth === "function" ? String(getTokenFromAuth() || "").trim() : "");
+    const t1 =
+      typeof getTokenFromAuth === "function"
+        ? String(getTokenFromAuth() || "").trim()
+        : "";
     if (t1) return t1;
-  } catch (e) {}
+  } catch (_) {}
 
+  // 2) من التخزينات
   try {
-    const ss1 = String(sessionStorage.getItem("AUTH_TOKEN") || "").trim();
-    if (ss1) return ss1;
+    const keys = [
+      "clos_token",
+      "CLOS_TOKEN",
+      "AUTH_TOKEN",
+      "auth_token",
+      "token",
+      "access_token",
+      "clos_session",
+    ];
 
-    const ss2 = String(sessionStorage.getItem("auth_token") || "").trim();
-    if (ss2) return ss2;
+    for (const k of keys) {
+      const s1 = String(sessionStorage.getItem(k) || "").trim();
+      if (s1) return s1;
 
-    const ls1 = String(localStorage.getItem("AUTH_TOKEN") || "").trim();
-    if (ls1) return ls1;
-
-    const ls2 = String(localStorage.getItem("auth_token") || "").trim();
-    if (ls2) return ls2;
-  } catch (e) {}
+      const l1 = String(localStorage.getItem(k) || "").trim();
+      if (l1) return l1;
+    }
+  } catch (_) {}
 
   return "";
 }
 
+function buildHeaders(extraHeaders, needsJson) {
+  const headers = new Headers(extraHeaders || {});
+
+  // ✅ ضيف التوكن تلقائيًا (حل 1)
+  const token = getTokenCompat();
+  if (token && !headers.has("authorization")) {
+    headers.set("authorization", `Bearer ${token}`);
+  }
+
+  // content-type فقط لو فيه body
+  if (needsJson && !headers.has("content-type")) {
+    headers.set("content-type", "application/json");
+  }
+
+  return headers;
+}
+
+/** ✅ GET مع Bearer token تلقائيًا */
 export async function apiGet(path) {
-  const res = await fetch(path, { method: "GET", cache: "no-store" });
+  const res = await fetch(path, {
+    method: "GET",
+    cache: "no-store",
+    credentials: "include",
+    headers: buildHeaders({}, false),
+  });
+
   const data = await parseJsonSafe(res);
 
   // ✅ اعتبر الفشل لو:
@@ -45,14 +80,17 @@ export async function apiGet(path) {
   if (!res.ok || data?.ok === false || data?.success === false) {
     throw new Error(data?.error || `HTTP ${res.status}`);
   }
+
   return data;
 }
 
+/** ✅ POST مع Bearer token تلقائيًا */
 export async function apiPost(path, body) {
   const res = await fetch(path, {
     method: "POST",
     cache: "no-store",
-    headers: { "content-type": "application/json" },
+    credentials: "include",
+    headers: buildHeaders({}, true),
     body: JSON.stringify(body ?? {}),
   });
 
@@ -82,7 +120,10 @@ export async function gas(action, payload) {
     if (!token) throw new Error("Unauthorized: missing token (not saved)");
   }
 
+  // ✅ نرسل wrapper كامل
   const reqBody = { action, payload: payload ?? {} };
+
+  // ✅ بعض أكشنز GAS تحتاج token داخل body (حافظنا على ذلك)
   if (token) reqBody.token = token;
 
   const out = await apiPost("/api/gas", reqBody);
