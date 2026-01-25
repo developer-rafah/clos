@@ -1,88 +1,79 @@
-import { loadAppConfig } from "./app-config.js";
-import { me, login, logout } from "./auth.js";
-import { roleToHome, getRoute, goto } from "./router.js";
-import { renderLogin, bindLogin, renderHome } from "./ui.js";
-import { enablePush, getPushStatus } from "./push.js";
+// public/assets/js/app.js
+import { apiGet, clearToken } from "./api.js";
+import { getRoute, go, guardRoute, roleToHome } from "./router.js";
+import { renderLogin, renderDashboard, renderLoading, renderError } from "./ui.js";
 
-const $app = document.getElementById("app");
-const $btnRefresh = document.getElementById("btnRefresh");
+const LS_ME = "CLOS_ME_V1";
 
-function setHtml(html) {
-  $app.innerHTML = html;
+function loadMeCache() {
+  try {
+    const raw = localStorage.getItem(LS_ME);
+    if (!raw) return null;
+    return JSON.parse(raw);
+  } catch {
+    return null;
+  }
+}
+
+function saveMeCache(me) {
+  try {
+    localStorage.setItem(LS_ME, JSON.stringify(me || null));
+  } catch {}
+}
+
+async function refreshMe() {
+  // IMPORTANT: /api/auth/me يحتاج Authorization Bearer
+  const out = await apiGet("/api/auth/me", { auth: true });
+  // بعض الردود تكون { user, token } وبعضها { user } فقط
+  const me = out?.user || null;
+  if (me) saveMeCache(me);
+  return me;
+}
+
+async function renderByRoute(me) {
+  const route = getRoute();
+  const g = guardRoute(route, me);
+
+  if (!g.ok) {
+    go(g.redirect);
+    return;
+  }
+
+  if (route === "login") {
+    renderLogin({ me });
+    return;
+  }
+
+  // agent/staff/admin
+  renderDashboard({ route, me });
 }
 
 async function boot() {
+  renderLoading("جارٍ التحقق من الجلسة...");
+
+  let me = loadMeCache();
+
+  // لو الكاش موجود نحاول نكمل بسرعة ثم نعمل refresh بالخلف
+  // لكن هنا نخليها مباشرة refresh لضمان عدم 401
   try {
-    await loadAppConfig(); // تأكد config جاهز
+    me = await refreshMe();
   } catch (e) {
-    setHtml(`<div class="alert">فشل تحميل الإعدادات: ${String(e?.message || e)}</div>`);
-    return;
+    // فشل التحقق => امسح التوكن + المستخدم وودّيه لتسجيل الدخول
+    saveMeCache(null);
+    clearToken();
+    me = null;
   }
 
-  const user = await me();
-  if (!user) {
-    showLogin();
-    return;
-  }
+  await renderByRoute(me);
 
-  // توجيه تلقائي حسب الدور
-  const r = getRoute();
-  if (r === "#/" || r === "" || r === "#") goto(roleToHome(user.role));
-  await renderForUser(user);
-}
-
-function showLogin(error = "") {
-  setHtml(renderLogin({ error, onSubmit: null }));
-  bindLogin($app, async ({ username, password }) => {
-    try {
-      const u = await login(username, password);
-      goto(roleToHome(u.role));
-      await renderForUser(u);
-    } catch (e) {
-      showLogin(e?.message || String(e));
-    }
+  window.addEventListener("hashchange", async () => {
+    // عند تغير الصفحة حاول تحديث me (اختياري)
+    // لكن إذا فيه ضغط كبير خله كاش فقط
+    const cached = loadMeCache();
+    await renderByRoute(cached);
   });
 }
 
-async function renderForUser(user) {
-  const pushStatus = await getPushStatus();
-  setHtml(renderHome({ user, pushStatus }));
-
-  const btnLogout = $app.querySelector("#btnLogout");
-  const btnEnablePush = $app.querySelector("#btnEnablePush");
-
-  btnLogout.addEventListener("click", async () => {
-    // ✅ لا Logout إلا يدويًا
-    await logout();
-    location.hash = "#/";
-    showLogin("تم تسجيل الخروج.");
-  });
-
-  btnEnablePush.addEventListener("click", async () => {
-    try {
-      btnEnablePush.disabled = true;
-      btnEnablePush.textContent = "جاري التفعيل...";
-      await enablePush();
-      await renderForUser(user);
-    } catch (e) {
-      btnEnablePush.disabled = false;
-      btnEnablePush.textContent = "تفعيل الإشعارات";
-      alert(e?.message || String(e));
-    }
-  });
-}
-
-window.addEventListener("hashchange", async () => {
-  const user = await me();
-  if (!user) return showLogin();
-  await renderForUser(user);
+document.addEventListener("DOMContentLoaded", () => {
+  boot().catch((e) => renderError(e?.message || String(e)));
 });
-
-$btnRefresh?.addEventListener("click", () => location.reload());
-
-// ✅ Register SW for offline + push
-if ("serviceWorker" in navigator) {
-  navigator.serviceWorker.register("/service-worker.js").catch(() => {});
-}
-
-boot();
