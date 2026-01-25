@@ -1,6 +1,6 @@
 /**
  * api.js
- * - إرسال Bearer Token تلقائيًا من localStorage
+ * - إرسال Bearer Token تلقائيًا من localStorage (حتى بدون auth:true)
  * - دعم GAS proxy
  * - توفير دوال global للتجربة في console
  */
@@ -27,7 +27,10 @@ function getToken() {
     if (!raw) return "";
 
     // لو كان JSON
-    if ((raw.startsWith("{") && raw.endsWith("}")) || (raw.startsWith("[") && raw.endsWith("]"))) {
+    if (
+      (raw.startsWith("{") && raw.endsWith("}")) ||
+      (raw.startsWith("[") && raw.endsWith("]"))
+    ) {
       try {
         const obj = JSON.parse(raw);
         return String(obj?.token || obj?.access_token || obj?.jwt || "").trim();
@@ -44,6 +47,10 @@ function getToken() {
   }
 }
 
+/**
+ * ✅ الآن: نضيف Authorization تلقائيًا إذا التوكن موجود (حتى لو auth=false)
+ * وإذا auth=true نضمن وجود التوكن
+ */
 function withAuthHeaders(extraHeaders = {}, needsJson = false, auth = false) {
   const headers = new Headers(extraHeaders);
 
@@ -51,10 +58,16 @@ function withAuthHeaders(extraHeaders = {}, needsJson = false, auth = false) {
     headers.set("content-type", "application/json");
   }
 
-  if (auth) {
-    const token = getToken();
-    if (!token) throw new Error("Unauthorized: missing token (CLOS_TOKEN_V1 is empty)");
+  const token = getToken();
+
+  // ✅ أرسل Authorization دائمًا إذا يوجد token
+  if (token && !headers.has("authorization")) {
     headers.set("authorization", `Bearer ${token}`);
+  }
+
+  // ✅ لو endpoint يتطلب auth (مؤكد) وtoken مفقود
+  if (auth && !token) {
+    throw new Error("Unauthorized: missing token (CLOS_TOKEN_V1 is empty)");
   }
 
   return headers;
