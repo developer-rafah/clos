@@ -1,9 +1,60 @@
 // public/assets/js/api.js
-// API helper for same-origin Cloudflare Pages Functions
-// - Adds Authorization Bearer token when { auth:true }
-// - Reads token from multiple keys (CLOS_TOKEN_V1 + legacy keys)
+// API helper for Clos (Cloudflare Pages Functions)
+// - Supports Bearer token from localStorage/sessionStorage
+// - Avoids "loading forever" by throwing clear errors
+// - Use: apiGet("/api/requests", { auth: true })
 
-function parseJsonSafeText(txt) {
+const TOKEN_KEYS = [
+  "CLOS_TOKEN_V1",
+  "CLOS_TOKEN",
+  "AUTH_TOKEN",
+  "auth_token",
+  "token",
+];
+
+function _safeStr(v) {
+  return String(v ?? "").trim();
+}
+
+export function getToken() {
+  try {
+    // 1) localStorage first (your current key)
+    for (const k of TOKEN_KEYS) {
+      const t = _safeStr(localStorage.getItem(k));
+      if (t) return t;
+    }
+  } catch (_) {}
+
+  try {
+    // 2) sessionStorage fallback
+    for (const k of TOKEN_KEYS) {
+      const t = _safeStr(sessionStorage.getItem(k));
+      if (t) return t;
+    }
+  } catch (_) {}
+
+  return "";
+}
+
+export function setToken(token) {
+  const t = _safeStr(token);
+  try {
+    if (t) localStorage.setItem("CLOS_TOKEN_V1", t);
+    else localStorage.removeItem("CLOS_TOKEN_V1");
+  } catch (_) {}
+}
+
+export function clearToken() {
+  try {
+    for (const k of TOKEN_KEYS) {
+      localStorage.removeItem(k);
+      sessionStorage.removeItem(k);
+    }
+  } catch (_) {}
+}
+
+async function parseJsonSafe(res) {
+  const txt = await res.text().catch(() => "");
   if (!txt) return {};
   try {
     return JSON.parse(txt);
@@ -12,136 +63,106 @@ function parseJsonSafeText(txt) {
   }
 }
 
-async function readResponse(res) {
-  const txt = await res.text().catch(() => "");
-  const data = parseJsonSafeText(txt);
-  return { txt, data };
-}
-
-/** ✅ توكن متوافق مع كل الإصدارات */
-export function getTokenCompat() {
-  // key used in your screenshots
-  const keys = [
-    "CLOS_TOKEN_V1",
-    "AUTH_TOKEN",
-    "auth_token",
-    "token",
-    "jwt",
-  ];
-
-  try {
-    for (const k of keys) {
-      const v = String(localStorage.getItem(k) || "").trim();
-      if (v) return v;
-    }
-  } catch {}
-
-  try {
-    for (const k of keys) {
-      const v = String(sessionStorage.getItem(k) || "").trim();
-      if (v) return v;
-    }
-  } catch {}
-
-  return "";
-}
-
-export function setToken(token) {
-  const t = String(token || "").trim();
-  if (!t) return clearToken();
-  try {
-    localStorage.setItem("CLOS_TOKEN_V1", t);
-  } catch {}
-}
-
-export function clearToken() {
-  try {
-    localStorage.removeItem("CLOS_TOKEN_V1");
-    localStorage.removeItem("AUTH_TOKEN");
-    localStorage.removeItem("auth_token");
-    sessionStorage.removeItem("AUTH_TOKEN");
-    sessionStorage.removeItem("auth_token");
-  } catch {}
-}
-
 function buildHeaders({ auth = false, headers = {} } = {}) {
-  const h = new Headers(headers || {});
-  if (!h.has("accept")) h.set("accept", "application/json");
+  const out = new Headers(headers);
+
+  // لا تكتب Content-Type إلا لو بنرسل JSON (في POST)
+  // (نتركها للـ apiPost)
 
   if (auth) {
-    const token = getTokenCompat();
-    if (token) h.set("authorization", `Bearer ${token}`);
+    const token = getToken();
+    if (!token) throw new Error("Unauthorized: missing token");
+    out.set("authorization", `Bearer ${token}`);
   }
 
-  return h;
+  return out;
 }
 
-function throwIfNotOk(res, data) {
+function normalizeError(res, data) {
+  // رسائل واضحة
+  const msg =
+    data?.error ||
+    data?.message ||
+    data?.gas?.error ||
+    data?.gas?.message ||
+    (typeof data?.raw === "string" ? data.raw : "") ||
+    `HTTP ${res.status}`;
+
+  const err = new Error(msg);
+  err.status = res.status;
+  err.data = data;
+  return err;
+}
+
+async function request(path, opts = {}) {
+  const {
+    method = "GET",
+    body,
+    auth = false,
+    headers = {},
+    cache = "no-store",
+    credentials = "include",
+  } = opts;
+
+  const init = {
+    method,
+    cache,
+    credentials,
+    headers: buildHeaders({ auth, headers }),
+  };
+
+  if (body !== undefined) {
+    init.headers.set("content-type", "application/json; charset=utf-8");
+    init.body = JSON.stringify(body ?? {});
+  }
+
+  const res = await fetch(path, init);
+  const data = await parseJsonSafe(res);
+
   // اعتبر الفشل لو:
   // - HTTP ليس 2xx
   // - أو ok=false
   // - أو success=false
   if (!res.ok || data?.ok === false || data?.success === false) {
-    const msg =
-      data?.error ||
-      data?.message ||
-      data?.gas?.error ||
-      data?.gas?.message ||
-      `HTTP ${res.status}`;
-    const err = new Error(msg);
-    err.status = res.status;
-    err.payload = data;
-    throw err;
+    throw normalizeError(res, data);
   }
+
+  return data;
 }
 
 export async function apiGet(path, opts = {}) {
-  const res = await fetch(path, {
-    method: "GET",
-    cache: "no-store",
-    credentials: "include",
-    headers: buildHeaders(opts),
-  });
-
-  const { data } = await readResponse(res);
-  throwIfNotOk(res, data);
-  return data;
+  return request(path, { ...opts, method: "GET" });
 }
 
 export async function apiPost(path, body, opts = {}) {
-  const res = await fetch(path, {
-    method: "POST",
-    cache: "no-store",
-    credentials: "include",
-    headers: buildHeaders({
-      ...opts,
-      headers: {
-        "content-type": "application/json",
-        ...(opts.headers || {}),
-      },
-    }),
-    body: JSON.stringify(body ?? {}),
-  });
-
-  const { data } = await readResponse(res);
-  throwIfNotOk(res, data);
-  return data;
+  return request(path, { ...opts, method: "POST", body });
 }
 
-/** ✅ Proxy to GAS */
-export async function gas(action, payload) {
-  action = String(action || "").trim();
-  if (!action) throw new Error("Missing action");
+// ===== Convenience endpoints =====
 
-  // auth.* و donate لا يحتاجون token
-  const isPublic = action === "donate" || action.startsWith("auth.");
-
-  const token = getTokenCompat();
-  if (!isPublic && !token) throw new Error("Unauthorized: missing token (not saved)");
-
-  const reqBody = { action, payload: payload ?? {} };
-  if (token) reqBody.token = token;
-
-  const out = await apiPost("/api/gas", reqBody, { auth: false });
-  return out?.gas ?? out;
+export async function me() {
+  return apiGet("/api/auth/me", { auth: true });
 }
+
+export async function logoutApi() {
+  // لو عندك endpoint logout
+  try {
+    await apiPost("/api/auth/logout", {}, { auth: true });
+  } catch (_) {}
+  clearToken();
+  return { ok: true, success: true };
+}
+
+export function debugToken() {
+  const t = getToken();
+  return {
+    hasToken: !!t,
+    tokenPreview: t ? t.slice(0, 18) + "..." : "",
+    key: "CLOS_TOKEN_V1",
+  };
+}
+
+// للتجارب في الـ Console (اختياري)
+try {
+  window.__closApi = { apiGet, apiPost, me, getToken, setToken, clearToken, debugToken };
+} catch (_) {}
