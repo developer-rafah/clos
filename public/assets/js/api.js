@@ -1,12 +1,9 @@
-/**
- * api.js
- * - إرسال Bearer Token تلقائيًا من localStorage (حتى بدون auth:true)
- * - دعم GAS proxy
- * - توفير دوال global للتجربة في console
- */
+// public/assets/js/api.js
+// API helper for same-origin Cloudflare Pages Functions
+// - Adds Authorization Bearer token when { auth:true }
+// - Reads token from multiple keys (CLOS_TOKEN_V1 + legacy keys)
 
-async function parseJsonSafe(res) {
-  const txt = await res.text().catch(() => "");
+function parseJsonSafeText(txt) {
   if (!txt) return {};
   try {
     return JSON.parse(txt);
@@ -15,131 +12,136 @@ async function parseJsonSafe(res) {
   }
 }
 
-/**
- * ✅ يقرأ التوكن من CLOS_TOKEN_V1
- * يدعم:
- * - token string مباشرة
- * - أو JSON مثل {"token":"..."} أو {"access_token":"..."}
- */
-function getToken() {
-  try {
-    const raw = String(localStorage.getItem("CLOS_TOKEN_V1") || "").trim();
-    if (!raw) return "";
-
-    // لو كان JSON
-    if (
-      (raw.startsWith("{") && raw.endsWith("}")) ||
-      (raw.startsWith("[") && raw.endsWith("]"))
-    ) {
-      try {
-        const obj = JSON.parse(raw);
-        return String(obj?.token || obj?.access_token || obj?.jwt || "").trim();
-      } catch {
-        // لو فشل parse اعتبره نص
-        return raw;
-      }
-    }
-
-    // نص مباشر
-    return raw;
-  } catch {
-    return "";
-  }
+async function readResponse(res) {
+  const txt = await res.text().catch(() => "");
+  const data = parseJsonSafeText(txt);
+  return { txt, data };
 }
 
-/**
- * ✅ الآن: نضيف Authorization تلقائيًا إذا التوكن موجود (حتى لو auth=false)
- * وإذا auth=true نضمن وجود التوكن
- */
-function withAuthHeaders(extraHeaders = {}, needsJson = false, auth = false) {
-  const headers = new Headers(extraHeaders);
+/** ✅ توكن متوافق مع كل الإصدارات */
+export function getTokenCompat() {
+  // key used in your screenshots
+  const keys = [
+    "CLOS_TOKEN_V1",
+    "AUTH_TOKEN",
+    "auth_token",
+    "token",
+    "jwt",
+  ];
 
-  if (needsJson && !headers.has("content-type")) {
-    headers.set("content-type", "application/json");
+  try {
+    for (const k of keys) {
+      const v = String(localStorage.getItem(k) || "").trim();
+      if (v) return v;
+    }
+  } catch {}
+
+  try {
+    for (const k of keys) {
+      const v = String(sessionStorage.getItem(k) || "").trim();
+      if (v) return v;
+    }
+  } catch {}
+
+  return "";
+}
+
+export function setToken(token) {
+  const t = String(token || "").trim();
+  if (!t) return clearToken();
+  try {
+    localStorage.setItem("CLOS_TOKEN_V1", t);
+  } catch {}
+}
+
+export function clearToken() {
+  try {
+    localStorage.removeItem("CLOS_TOKEN_V1");
+    localStorage.removeItem("AUTH_TOKEN");
+    localStorage.removeItem("auth_token");
+    sessionStorage.removeItem("AUTH_TOKEN");
+    sessionStorage.removeItem("auth_token");
+  } catch {}
+}
+
+function buildHeaders({ auth = false, headers = {} } = {}) {
+  const h = new Headers(headers || {});
+  if (!h.has("accept")) h.set("accept", "application/json");
+
+  if (auth) {
+    const token = getTokenCompat();
+    if (token) h.set("authorization", `Bearer ${token}`);
   }
 
-  const token = getToken();
-
-  // ✅ أرسل Authorization دائمًا إذا يوجد token
-  if (token && !headers.has("authorization")) {
-    headers.set("authorization", `Bearer ${token}`);
-  }
-
-  // ✅ لو endpoint يتطلب auth (مؤكد) وtoken مفقود
-  if (auth && !token) {
-    throw new Error("Unauthorized: missing token (CLOS_TOKEN_V1 is empty)");
-  }
-
-  return headers;
+  return h;
 }
 
 function throwIfNotOk(res, data) {
+  // اعتبر الفشل لو:
+  // - HTTP ليس 2xx
+  // - أو ok=false
+  // - أو success=false
   if (!res.ok || data?.ok === false || data?.success === false) {
-    const deeper = data?.gas?.error || data?.gas?.message;
-    throw new Error(deeper || data?.error || `HTTP ${res.status}`);
+    const msg =
+      data?.error ||
+      data?.message ||
+      data?.gas?.error ||
+      data?.gas?.message ||
+      `HTTP ${res.status}`;
+    const err = new Error(msg);
+    err.status = res.status;
+    err.payload = data;
+    throw err;
   }
 }
 
-/** ✅ GET */
-export async function apiGet(path, { auth = false, headers = {} } = {}) {
+export async function apiGet(path, opts = {}) {
   const res = await fetch(path, {
     method: "GET",
     cache: "no-store",
     credentials: "include",
-    headers: withAuthHeaders(headers, false, auth),
+    headers: buildHeaders(opts),
   });
 
-  const data = await parseJsonSafe(res);
+  const { data } = await readResponse(res);
   throwIfNotOk(res, data);
   return data;
 }
 
-/** ✅ POST */
-export async function apiPost(path, body = {}, { auth = false, headers = {} } = {}) {
+export async function apiPost(path, body, opts = {}) {
   const res = await fetch(path, {
     method: "POST",
     cache: "no-store",
     credentials: "include",
-    headers: withAuthHeaders(headers, true, auth),
+    headers: buildHeaders({
+      ...opts,
+      headers: {
+        "content-type": "application/json",
+        ...(opts.headers || {}),
+      },
+    }),
     body: JSON.stringify(body ?? {}),
   });
 
-  const data = await parseJsonSafe(res);
+  const { data } = await readResponse(res);
   throwIfNotOk(res, data);
   return data;
 }
 
-/** ✅ GAS proxy */
-export async function gas(action, payload = {}) {
+/** ✅ Proxy to GAS */
+export async function gas(action, payload) {
   action = String(action || "").trim();
   if (!action) throw new Error("Missing action");
 
+  // auth.* و donate لا يحتاجون token
   const isPublic = action === "donate" || action.startsWith("auth.");
 
-  const body = { action, payload };
+  const token = getTokenCompat();
+  if (!isPublic && !token) throw new Error("Unauthorized: missing token (not saved)");
 
-  // بعض أكشنز GAS تحتاج token داخل body
-  if (!isPublic) {
-    const token = getToken();
-    if (!token) throw new Error("Unauthorized: missing token (CLOS_TOKEN_V1 is empty)");
-    body.token = token;
-  }
+  const reqBody = { action, payload: payload ?? {} };
+  if (token) reqBody.token = token;
 
-  const out = await apiPost("/api/gas", body, { auth: false });
+  const out = await apiPost("/api/gas", reqBody, { auth: false });
   return out?.gas ?? out;
-}
-
-/** ✅ تشخيص سريع */
-export function __debugToken() {
-  return getToken();
-}
-
-/* =========================
-   ✅ اجعلها متاحة في console
-========================= */
-if (typeof window !== "undefined") {
-  window.apiGet = apiGet;
-  window.apiPost = apiPost;
-  window.gas = gas;
-  window.__debugToken = __debugToken;
 }
