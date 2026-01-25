@@ -23,4 +23,3 @@ export async function insertLog(env, row) {
     console.log("insertLog failed:", e?.message || e);
   }
 }
-
