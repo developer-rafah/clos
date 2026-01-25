@@ -43,3 +43,4 @@ export async function onRequestPost({ request, env }) {
     return fail(e?.message || String(e), 500);
   }
 }
+
