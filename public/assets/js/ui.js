@@ -10,27 +10,11 @@ export function escapeHtml(s) {
   }[ch]));
 }
 
-function renderShell(inner) {
+export function renderShell(contentHtml) {
   return `
-    <div class="card">
-      ${inner}
-    </div>
-  `;
-}
-
-function renderTopBar({ user } = {}) {
-  const role = escapeHtml(user?.role || "");
-  const name = escapeHtml(user?.name || user?.username || "");
-  return `
-    <div class="row" style="justify-content:space-between;align-items:center;gap:12px;">
-      <div>
-        <h1 class="h1">مرحبًا ${name}</h1>
-        <div class="muted">الدور: <span class="pill">${role}</span></div>
-      </div>
-
-      <div class="row" style="gap:10px;flex-wrap:wrap;">
-        <button class="btn btn--ghost" type="button" data-action="push.enable">تفعيل الإشعارات</button>
-        <button class="btn btn--danger" type="button" data-action="auth.logout">تسجيل الخروج</button>
+    <div class="app">
+      <div class="card">
+        ${contentHtml}
       </div>
     </div>
   `;
@@ -38,9 +22,11 @@ function renderTopBar({ user } = {}) {
 
 export function renderLoading(msg = "جاري التحميل...") {
   return renderShell(`
-    <div style="text-align:center;padding:30px 10px;">
-      <div class="spinner" style="margin:0 auto 14px auto;"></div>
-      <div class="muted">${escapeHtml(msg)}</div>
+    <div style="min-height:340px;display:grid;place-items:center;text-align:center;">
+      <div>
+        <div class="spinner" style="margin:0 auto 14px auto;"></div>
+        <div class="muted">${escapeHtml(msg)}</div>
+      </div>
     </div>
   `);
 }
@@ -49,7 +35,7 @@ export function renderLogin({ error = "", debug = null } = {}) {
   return renderShell(`
     <div>
       <h1 class="h1">تسجيل الدخول</h1>
-      <div class="muted">سجّل دخولك من الواجهة، سيتم التوجيه تلقائيًا حسب الصلاحية.</div>
+      <div class="muted">لا يوجد جلسة أو انتهت.. سجّل دخولك من الواجهة.</div>
 
       <div class="hr"></div>
 
@@ -62,10 +48,11 @@ export function renderLogin({ error = "", debug = null } = {}) {
 
         <div class="row" style="margin-top:14px;align-items:center;gap:10px;">
           <button class="btn" type="submit">دخول</button>
-          <span class="small muted">لن يتم تسجيل الخروج إلا عند اختيار ذلك يدويًا</span>
+          <span class="small">لن يتم تسجيل الخروج إلا عند اختيار ذلك يدويًا.</span>
         </div>
 
-        ${error ? `<div class="alert" style="margin-top:12px;">${escapeHtml(error)}</div>` : ``}
+        ${error ? `<div class="alert" style="margin-top:14px;">${escapeHtml(error)}</div>` : ``}
+
         ${debug ? `<div class="small muted" style="margin-top:10px;">Debug: ${escapeHtml(JSON.stringify(debug))}</div>` : ``}
       </form>
     </div>
@@ -75,7 +62,6 @@ export function renderLogin({ error = "", debug = null } = {}) {
 export function bindLogin(root, onSubmit) {
   const form = root.querySelector("#loginForm");
   if (!form) return;
-
   form.addEventListener("submit", (e) => {
     e.preventDefault();
     const fd = new FormData(form);
@@ -86,7 +72,44 @@ export function bindLogin(root, onSubmit) {
   });
 }
 
-export function renderAgent({ user, pushStatus = "", tasksHtml = "" } = {}) {
+function renderTopBar({ user }) {
+  const role = escapeHtml(user?.role || "");
+  const name = escapeHtml(user?.name || user?.username || "");
+  return `
+    <div class="row" style="justify-content:space-between;align-items:center;gap:12px;">
+      <div>
+        <h1 class="h1">مرحبًا ${name}</h1>
+        <div class="muted">الدور: <span class="pill">${role}</span></div>
+      </div>
+      <div class="row" style="gap:10px;flex-wrap:wrap;">
+        <button id="btnEnablePush" class="btn btn--ghost" type="button">تفعيل الإشعارات</button>
+        <button id="btnLogout" class="btn btn--danger" type="button">تسجيل الخروج</button>
+      </div>
+    </div>
+  `;
+}
+
+export function renderAgent({ user, pushStatus = "", tasks = [], tasksError = "" } = {}) {
+  const tasksHtml = tasksError
+    ? `<div class="alert">${escapeHtml(tasksError)}</div>`
+    : (!tasks || tasks.length === 0)
+      ? `<div class="muted">لا توجد مهام حالياً.</div>`
+      : `
+        <div class="list">
+          ${tasks.map((t) => `
+            <div class="list__item">
+              <div class="row" style="justify-content:space-between;gap:10px;align-items:center;">
+                <div>
+                  <div class="strong">${escapeHtml(t.title ?? t.name ?? "طلب")}</div>
+                  <div class="small muted">${escapeHtml(t.status ?? t.state ?? "")}</div>
+                </div>
+                <div class="pill">${escapeHtml(t.id ?? t.code ?? "")}</div>
+              </div>
+            </div>
+          `).join("")}
+        </div>
+      `;
+
   return renderShell(`
     ${renderTopBar({ user })}
 
@@ -98,13 +121,15 @@ export function renderAgent({ user, pushStatus = "", tasksHtml = "" } = {}) {
     <div class="hr"></div>
 
     <div class="row" style="gap:10px;flex-wrap:wrap;">
-      <button class="btn" type="button" data-action="agent.refresh">تحديث البيانات</button>
-      <button class="btn btn--ghost" type="button" data-action="agent.tasks">عرض المهام</button>
+      <button id="btnAgentRefresh" class="btn" type="button">تحديث البيانات</button>
+      <button id="btnAgentTasks" class="btn btn--ghost" type="button">عرض المهام</button>
     </div>
 
     <div class="hr"></div>
 
-    <div id="agentTasks">${tasksHtml}</div>
+    <div id="agentTasks">
+      ${tasksHtml}
+    </div>
 
     <div class="hr"></div>
 
@@ -125,8 +150,8 @@ export function renderStaff({ user, pushStatus = "" } = {}) {
     <div class="hr"></div>
 
     <div class="row" style="gap:10px;flex-wrap:wrap;">
-      <button class="btn" type="button" data-action="staff.refresh">تحديث</button>
-      <button class="btn btn--ghost" type="button" data-action="staff.action">إجراء</button>
+      <button id="btnStaffRefresh" class="btn" type="button">تحديث</button>
+      <button id="btnStaffAction" class="btn btn--ghost" type="button">إجراء</button>
     </div>
 
     <div class="hr"></div>
@@ -148,13 +173,38 @@ export function renderAdmin({ user, pushStatus = "" } = {}) {
     <div class="hr"></div>
 
     <div class="row" style="gap:10px;flex-wrap:wrap;">
-      <button class="btn" type="button" data-action="admin.users">المستخدمين</button>
-      <button class="btn btn--ghost" type="button" data-action="admin.reports">التقارير</button>
+      <button id="btnAdminUsers" class="btn" type="button">المستخدمين</button>
+      <button id="btnAdminReports" class="btn btn--ghost" type="button">التقارير</button>
     </div>
 
     <div class="hr"></div>
 
     <div class="pill">🔔 الإشعارات</div>
     <div class="small" style="margin-top:10px;">${escapeHtml(pushStatus || "—")}</div>
+  `);
+}
+
+export function renderHome({ user, pushStatus = "" } = {}) {
+  return renderShell(`
+    ${renderTopBar({ user })}
+
+    <div class="hr"></div>
+
+    <div class="row">
+      <div class="col">
+        <div class="pill">✅ متوافق مع الأجهزة اللوحية</div>
+        <div class="small" style="margin-top:10px;">
+          الواجهة تتكيف تلقائيًا مع أحجام الشاشات (Tablet/Laptop/Mobile) مع RTL كامل.
+        </div>
+      </div>
+      <div class="col">
+        <div class="pill">🔔 الإشعارات</div>
+        <div class="small" style="margin-top:10px;">${escapeHtml(pushStatus || "—")}</div>
+      </div>
+    </div>
+
+    <div class="hr"></div>
+
+    <div class="muted">هذه صفحة موحّدة — المحتوى هنا يمكن تخصيصه لكل دور لاحقًا.</div>
   `);
 }
