@@ -53,3 +53,4 @@ export async function requireAuth(request, env, opts = {}) {
 
   return { user };
 }
+
