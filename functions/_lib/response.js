@@ -31,4 +31,3 @@ export function forbidden(error = "Forbidden", extra = {}) {
 export function serverError(error = "Server error", extra = {}) {
   return fail(error, 500, extra);
 }
-
