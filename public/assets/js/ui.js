@@ -1,214 +1,177 @@
 // public/assets/js/ui.js
+import { apiGet, apiPost, setToken, clearToken } from "./api.js";
+import { go, roleToHome } from "./router.js";
 
-export function escapeHtml(s) {
-  return String(s || "").replace(/[&<>"']/g, (ch) => ({
-    "&": "&amp;",
-    "<": "&lt;",
-    ">": "&gt;",
-    '"': "&quot;",
-    "'": "&#039;",
-  }[ch]));
+const LS_ME = "CLOS_ME_V1";
+
+function $(sel) {
+  return document.querySelector(sel);
 }
 
-export function renderShell(contentHtml) {
-  return `
-    <div class="app">
-      <div class="card">
-        ${contentHtml}
+function setMain(html) {
+  const root = $("#app") || document.body;
+  root.innerHTML = html;
+}
+
+export function renderLoading(text = "Loading...") {
+  setMain(`
+    <div style="min-height:60vh;display:grid;place-items:center;font-family:Tajawal,Arial,sans-serif;color:#fff">
+      <div style="text-align:center;opacity:.9">
+        <div style="margin-bottom:10px">${escapeHtml(text)}</div>
+        <div style="width:44px;height:44px;border-radius:999px;border:4px solid rgba(255,255,255,.18);border-top-color:#7a5ea8;animation:spin 1s linear infinite"></div>
       </div>
     </div>
-  `;
-}
-
-export function renderLogin({ error = "" } = {}) {
-  return renderShell(`
-    <div>
-      <h1 class="h1">تسجيل الدخول</h1>
-      <div class="muted">شاشة موحّدة للجميع — سيتم التوجيه تلقائيًا حسب الصلاحية.</div>
-
-      <div class="hr"></div>
-
-      <form id="loginForm">
-        <div class="label">اسم المستخدم</div>
-        <input class="input" name="username" autocomplete="username" inputmode="text" />
-
-        <div class="label">كلمة المرور</div>
-        <input class="input" name="password" type="password" autocomplete="current-password" />
-
-        <div class="row" style="margin-top:14px;align-items:center;gap:10px;">
-          <button class="btn" type="submit">دخول</button>
-          <span class="small">لن يتم تسجيل الخروج إلا عند اختيار ذلك يدويًا.</span>
-        </div>
-
-        ${error ? `<div class="alert" style="margin-top:14px;">${escapeHtml(error)}</div>` : ``}
-      </form>
-    </div>
+    <style>@keyframes spin{to{transform:rotate(360deg)}}</style>
   `);
 }
 
-export function bindLogin(root, onSubmit) {
-  const form = root.querySelector("#loginForm");
-  if (!form) return;
-  form.addEventListener("submit", (e) => {
-    e.preventDefault();
-    const fd = new FormData(form);
-    onSubmit({
-      username: String(fd.get("username") || "").trim(),
-      password: String(fd.get("password") || "").trim(),
-    });
+export function renderError(msg) {
+  setMain(`
+    <div style="padding:18px;font-family:Tajawal,Arial,sans-serif;color:#fff">
+      <div style="max-width:680px;margin:24px auto;background:rgba(255,255,255,.06);border:1px solid rgba(255,255,255,.12);border-radius:16px;padding:16px">
+        <h3 style="margin:0 0 10px">حدث خطأ</h3>
+        <pre style="white-space:pre-wrap;direction:ltr;background:rgba(0,0,0,.25);padding:12px;border-radius:12px;border:1px solid rgba(255,255,255,.12)">${escapeHtml(
+          msg || "Unknown error"
+        )}</pre>
+        <button id="btnBack" style="margin-top:12px;padding:10px 14px;border-radius:12px;border:1px solid rgba(255,255,255,.12);background:rgba(255,255,255,.06);color:#fff;cursor:pointer">رجوع</button>
+      </div>
+    </div>
+  `);
+  $("#btnBack")?.addEventListener("click", () => history.back());
+}
+
+export function renderLogin() {
+  setMain(`
+    <div style="padding:18px;font-family:Tajawal,Arial,sans-serif;color:#fff">
+      <div style="max-width:520px;margin:24px auto;background:rgba(255,255,255,.06);border:1px solid rgba(255,255,255,.12);border-radius:16px;padding:16px">
+        <h2 style="margin:0 0 12px">تسجيل الدخول</h2>
+
+        <label>اسم المستخدم</label>
+        <input id="username" autocomplete="username" style="width:100%;padding:12px;border-radius:12px;border:1px solid rgba(255,255,255,.14);background:rgba(0,0,0,.18);color:#fff;outline:none" />
+
+        <label style="display:block;margin-top:10px">كلمة المرور</label>
+        <input id="password" type="password" autocomplete="current-password" style="width:100%;padding:12px;border-radius:12px;border:1px solid rgba(255,255,255,.14);background:rgba(0,0,0,.18);color:#fff;outline:none" />
+
+        <div style="display:flex;gap:10px;margin-top:14px;flex-wrap:wrap">
+          <button id="btnLogin" style="padding:10px 14px;border-radius:12px;border:1px solid rgba(109,76,255,.45);background:#6d4cff;color:#fff;cursor:pointer">دخول</button>
+          <button id="btnClear" style="padding:10px 14px;border-radius:12px;border:1px solid rgba(255,255,255,.14);background:rgba(255,255,255,.06);color:#fff;cursor:pointer">مسح الجلسة</button>
+        </div>
+
+        <div id="err" style="margin-top:12px;color:#ffb4b4;white-space:pre-wrap"></div>
+      </div>
+    </div>
+  `);
+
+  $("#btnClear")?.addEventListener("click", () => {
+    clearToken();
+    try { localStorage.removeItem(LS_ME); } catch {}
+    $("#err").textContent = "تم مسح الجلسة.";
+  });
+
+  $("#btnLogin")?.addEventListener("click", async () => {
+    const username = String($("#username")?.value || "").trim();
+    const password = String($("#password")?.value || "").trim();
+    $("#err").textContent = "";
+
+    if (!username || !password) {
+      $("#err").textContent = "الرجاء إدخال اسم المستخدم وكلمة المرور.";
+      return;
+    }
+
+    try {
+      // login endpoint returns { ok, success, user, token }
+      const out = await apiPost("/api/auth/login", { username, password });
+
+      const token = String(out?.token || "").trim();
+      const user = out?.user || null;
+
+      if (!token || !user) throw new Error("Login response missing token/user");
+
+      setToken(token);
+      try { localStorage.setItem(LS_ME, JSON.stringify(user)); } catch {}
+
+      go(roleToHome(user.role));
+    } catch (e) {
+      $("#err").textContent = e?.message || String(e);
+    }
   });
 }
 
-function renderTopBar({ user }) {
-  const role = escapeHtml(user?.role || "");
-  const name = escapeHtml(user?.name || user?.username || "");
-  return `
-    <div class="row" style="justify-content:space-between;align-items:center;gap:12px;">
-      <div>
-        <h1 class="h1">مرحبًا ${name}</h1>
-        <div class="muted">الدور: <span class="pill">${role}</span></div>
-      </div>
-      <div class="row" style="gap:10px;flex-wrap:wrap;">
-        <button id="btnEnablePush" class="btn btn--ghost" type="button">تفعيل الإشعارات</button>
-        <button id="btnLogout" class="btn btn--danger" type="button">تسجيل الخروج</button>
-      </div>
-    </div>
-  `;
-}
+export function renderDashboard({ route, me }) {
+  // UI بسيطة، تقدر تربطها بواجهتك الحالية
+  setMain(`
+    <div style="padding:18px;font-family:Tajawal,Arial,sans-serif;color:#fff">
+      <div style="max-width:900px;margin:0 auto">
+        <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap">
+          <div>
+            <div style="font-size:22px;font-weight:700">مرحباً ${escapeHtml(me?.name || me?.username || "")}</div>
+            <div style="opacity:.8;margin-top:4px">الدور: ${escapeHtml(me?.role || "")} — الصفحة: ${escapeHtml(route)}</div>
+          </div>
 
-export function renderAgent({ user, pushStatus = "", tasks = [], tasksError = "" } = {}) {
-  const role = escapeHtml(user?.role || "");
-  const name = escapeHtml(user?.name || user?.username || "");
-
-  const tasksHtml = tasksError
-    ? `<div class="alert">${escapeHtml(tasksError)}</div>`
-    : (!tasks || tasks.length === 0)
-      ? `<div class="muted">لا توجد مهام حالياً (أو لم يتم جلبها بعد).</div>`
-      : `
-        <div class="list">
-          ${tasks.map((t) => `
-            <div class="list__item">
-              <div class="row" style="justify-content:space-between;gap:10px;align-items:center;">
-                <div>
-                  <div class="strong">${escapeHtml(t.title ?? t.name ?? "مهمة")}</div>
-                  <div class="small muted">${escapeHtml(t.status ?? t.state ?? "")}</div>
-                </div>
-                <div class="pill">${escapeHtml(t.id ?? t.code ?? "")}</div>
-              </div>
-            </div>
-          `).join("")}
-        </div>
-      `;
-
-  return `
-    <div>
-      <div class="row" style="justify-content:space-between;align-items:center;gap:12px;">
-        <div>
-          <h1 class="h1">مرحبًا ${name}</h1>
-          <div class="muted">الدور: <span class="pill">${role}</span></div>
+          <div style="display:flex;gap:10px;flex-wrap:wrap">
+            <button id="btnRefreshMe" style="padding:10px 14px;border-radius:12px;border:1px solid rgba(255,255,255,.14);background:rgba(255,255,255,.06);color:#fff;cursor:pointer">تحديث</button>
+            <button id="btnLogout" style="padding:10px 14px;border-radius:12px;border:1px solid rgba(255,80,80,.35);background:rgba(255,80,80,.12);color:#fff;cursor:pointer">تسجيل الخروج</button>
+          </div>
         </div>
 
-        <div class="row" style="gap:10px;flex-wrap:wrap;">
-          <button class="btn btn--ghost" type="button" data-action="push.enable">تفعيل الإشعارات</button>
-          <button class="btn btn--danger" type="button" data-action="auth.logout">تسجيل الخروج</button>
+        <div style="margin-top:16px;background:rgba(255,255,255,.06);border:1px solid rgba(255,255,255,.12);border-radius:16px;padding:16px">
+          <h3 style="margin:0 0 10px">اختبار سريع للـ API</h3>
+          <div style="display:flex;gap:10px;flex-wrap:wrap">
+            <button id="btnTestMe" style="padding:10px 14px;border-radius:12px;border:1px solid rgba(255,255,255,.14);background:rgba(255,255,255,.06);color:#fff;cursor:pointer">/api/auth/me</button>
+            <button id="btnTestRequests" style="padding:10px 14px;border-radius:12px;border:1px solid rgba(255,255,255,.14);background:rgba(255,255,255,.06);color:#fff;cursor:pointer">/api/requests</button>
+          </div>
+
+          <pre id="out" style="margin-top:12px;white-space:pre-wrap;direction:ltr;background:rgba(0,0,0,.25);padding:12px;border-radius:12px;border:1px solid rgba(255,255,255,.12)"></pre>
         </div>
       </div>
-
-      <div class="hr"></div>
-
-      <h2 class="h2">لوحة المندوب</h2>
-      <div class="muted">هنا تظهر مهام المندوب (طلبات/زيارات/تسليمات...)</div>
-
-      <div class="hr"></div>
-
-      <div class="row" style="gap:10px;flex-wrap:wrap;">
-        <button class="btn" type="button" data-action="agent.refresh">تحديث البيانات</button>
-        <button class="btn btn--ghost" type="button" data-action="agent.tasks">عرض المهام</button>
-      </div>
-
-      <div class="hr"></div>
-
-      <div id="agentTasks">
-        ${tasksHtml}
-      </div>
-
-      <div class="hr"></div>
-
-      <div class="pill">🔔 الإشعارات</div>
-      <div class="small" style="margin-top:10px;">${escapeHtml(pushStatus || "—")}</div>
     </div>
-  `;
-}
-
-
-export function renderStaff({ user, pushStatus = "" } = {}) {
-  return renderShell(`
-    ${renderTopBar({ user })}
-
-    <div class="hr"></div>
-
-    <h2 class="h2">لوحة الموظف</h2>
-    <div class="muted">هنا تظهر أدوات الموظف (مثال: استقبال طلبات، إدخال بيانات...)</div>
-
-    <div class="hr"></div>
-
-    <div class="row" style="gap:10px;flex-wrap:wrap;">
-      <button id="btnStaffRefresh" class="btn" type="button">تحديث</button>
-      <button id="btnStaffAction" class="btn btn--ghost" type="button">إجراء</button>
-    </div>
-
-    <div class="hr"></div>
-
-    <div class="pill">🔔 الإشعارات</div>
-    <div class="small" style="margin-top:10px;">${escapeHtml(pushStatus || "—")}</div>
   `);
+
+  $("#btnLogout")?.addEventListener("click", async () => {
+    try {
+      // لو السيرفر يحتاج auth logout
+      await apiPost("/api/auth/logout", {}, { auth: true }).catch(() => {});
+    } finally {
+      clearToken();
+      try { localStorage.removeItem(LS_ME); } catch {}
+      go("login");
+    }
+  });
+
+  $("#btnRefreshMe")?.addEventListener("click", async () => {
+    try {
+      const out = await apiGet("/api/auth/me", { auth: true });
+      const user = out?.user || null;
+      if (user) {
+        try { localStorage.setItem(LS_ME, JSON.stringify(user)); } catch {}
+      }
+      $("#out").textContent = JSON.stringify(out, null, 2);
+    } catch (e) {
+      $("#out").textContent = String(e?.message || e);
+    }
+  });
+
+  $("#btnTestMe")?.addEventListener("click", async () => {
+    try {
+      const out = await apiGet("/api/auth/me", { auth: true });
+      $("#out").textContent = JSON.stringify(out, null, 2);
+    } catch (e) {
+      $("#out").textContent = String(e?.message || e);
+    }
+  });
+
+  $("#btnTestRequests")?.addEventListener("click", async () => {
+    try {
+      const out = await apiGet("/api/requests", { auth: true });
+      $("#out").textContent = JSON.stringify(out, null, 2);
+    } catch (e) {
+      $("#out").textContent = String(e?.message || e);
+    }
+  });
 }
 
-export function renderAdmin({ user, pushStatus = "" } = {}) {
-  return renderShell(`
-    ${renderTopBar({ user })}
-
-    <div class="hr"></div>
-
-    <h2 class="h2">لوحة المدير</h2>
-    <div class="muted">هنا تظهر إدارة النظام (مثال: المستخدمين، الصلاحيات، التقارير...)</div>
-
-    <div class="hr"></div>
-
-    <div class="row" style="gap:10px;flex-wrap:wrap;">
-      <button id="btnAdminUsers" class="btn" type="button">المستخدمين</button>
-      <button id="btnAdminReports" class="btn btn--ghost" type="button">التقارير</button>
-    </div>
-
-    <div class="hr"></div>
-
-    <div class="pill">🔔 الإشعارات</div>
-    <div class="small" style="margin-top:10px;">${escapeHtml(pushStatus || "—")}</div>
-  `);
-}
-
-/** fallback لو حصل شيء غير متوقع */
-export function renderHome({ user, pushStatus = "" } = {}) {
-  return renderShell(`
-    ${renderTopBar({ user })}
-
-    <div class="hr"></div>
-
-    <div class="row">
-      <div class="col">
-        <div class="pill">✅ متوافق مع الأجهزة اللوحية</div>
-        <div class="small" style="margin-top:10px;">
-          الواجهة تتكيف تلقائيًا مع أحجام الشاشات (Tablet/Laptop/Mobile) مع RTL كامل.
-        </div>
-      </div>
-      <div class="col">
-        <div class="pill">🔔 الإشعارات</div>
-        <div class="small" style="margin-top:10px;">${escapeHtml(pushStatus || "—")}</div>
-      </div>
-    </div>
-
-    <div class="hr"></div>
-
-    <div class="muted">هذه صفحة موحّدة — المحتوى هنا يمكن تخصيصه لكل دور لاحقًا.</div>
-  `);
+function escapeHtml(s) {
+  return String(s || "").replace(/[&<>"']/g, (ch) => {
+    return ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#039;" })[ch];
+  });
 }
