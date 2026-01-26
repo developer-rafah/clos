@@ -47,7 +47,11 @@ async function fetchJsonAuth(path, { method = "GET", body } = {}) {
   // اقرأ JSON أو نص
   const txt = await res.text().catch(() => "");
   let data = {};
-  try { data = txt ? JSON.parse(txt) : {}; } catch { data = { raw: txt }; }
+  try {
+    data = txt ? JSON.parse(txt) : {};
+  } catch {
+    data = { raw: txt };
+  }
 
   if (!res.ok || data?.ok === false || data?.success === false) {
     const msg = data?.error || `HTTP ${res.status}`;
@@ -101,32 +105,36 @@ async function renderForUser(user) {
     setHtml(renderAgent({ user, pushStatus, tasks: [], tasksError: "" }));
     bindCommonTopBar(user);
 
-    const btnRefresh = $app.querySelector("#btnAgentRefresh");
-    const btnShow = $app.querySelector("#btnAgentShowTasks");
-
     const loadTasks = async () => {
       try {
-        // API الحقيقي للمهام (عندك يشتغل بـ Bearer)
+        // ✅ هنا كان سبب المشكلة غالبًا: لازم Bearer
         const out = await fetchJsonAuth("/api/requests");
         const items = out?.items || out?.data || out?.requests || [];
         setHtml(renderAgent({ user, pushStatus, tasks: items, tasksError: "" }));
         bindCommonTopBar(user);
-        bindAgentButtons(user, loadTasks);
+        bindAgentButtons(loadTasks);
       } catch (e) {
-        setHtml(renderAgent({ user, pushStatus, tasks: [], tasksError: e?.message || String(e) }));
+        setHtml(
+          renderAgent({
+            user,
+            pushStatus,
+            tasks: [],
+            tasksError: e?.message || String(e),
+          })
+        );
         bindCommonTopBar(user);
-        bindAgentButtons(user, loadTasks);
+        bindAgentButtons(loadTasks);
       }
     };
 
-    const bindAgentButtons = (u, loader) => {
+    const bindAgentButtons = (loader) => {
       const r1 = $app.querySelector("#btnAgentRefresh");
       const r2 = $app.querySelector("#btnAgentShowTasks");
       r1?.addEventListener("click", loader);
       r2?.addEventListener("click", loader);
     };
 
-    bindAgentButtons(user, loadTasks);
+    bindAgentButtons(loadTasks);
     // جلب تلقائي أول مرة (بدون تعليق الصفحة إذا فشل)
     loadTasks().catch(() => {});
     return;
@@ -135,14 +143,12 @@ async function renderForUser(user) {
   if (route.name === "staff") {
     setHtml(renderStaff({ user, pushStatus }));
     bindCommonTopBar(user);
-    // هنا لاحقاً تضع API الموظف
     return;
   }
 
   if (route.name === "admin") {
     setHtml(renderAdmin({ user, pushStatus }));
     bindCommonTopBar(user);
-    // هنا لاحقاً تضع API المدير
     return;
   }
 
@@ -166,6 +172,7 @@ function bindCommonTopBar(user) {
       btnEnablePush.disabled = true;
       btnEnablePush.textContent = "جاري التفعيل...";
       await enablePush();
+
       // إعادة رندر بعد التفعيل
       const u = await me();
       if (!u) return showLogin();
@@ -183,7 +190,9 @@ async function boot() {
     setHtml(renderLoading("تحميل الإعدادات..."));
     await loadAppConfig();
   } catch (e) {
-    setHtml(`<div class="alert">فشل تحميل الإعدادات: ${String(e?.message || e)}</div>`);
+    setHtml(
+      `<div class="alert">فشل تحميل الإعدادات: ${String(e?.message || e)}</div>`
+    );
     return;
   }
 
