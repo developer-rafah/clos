@@ -1,4 +1,4 @@
-// APP MODULE
+// public/assets/js/app.js
 
 import { loadAppConfig } from "./app-config.js";
 import { me, login, logout } from "./auth.js";
@@ -13,103 +13,131 @@ import {
   renderHome,
 } from "./ui.js";
 import { enablePush, getPushStatus } from "./push.js";
-import { apiGet, apiPost } from "./api.js";
 
 const $app = document.getElementById("app");
 const $btnRefresh = document.getElementById("btnRefresh");
+
+const TOKEN_KEY = "CLOS_TOKEN_V1";
 
 function setHtml(html) {
   $app.innerHTML = html;
 }
 
-function toStr(x) {
-  return String(x ?? "").trim();
-}
-
-function isClosedStatus(status) {
-  const s = toStr(status);
-  return /مكتمل|مغلق|منجز|تم|مغلقه|منتهي/i.test(s);
-}
-
-function belongsToAgent(req, user) {
-  const au = toStr(req?.agent_username);
-  const an = toStr(req?.agent_name);
-  const u1 = toStr(user?.username);
-  const u2 = toStr(user?.name);
-
-  // يقبل أي تخزين سابق (username أو name)
-  return (
-    (au && u1 && au === u1) ||
-    (an && u1 && an === u1) ||
-    (an && u2 && an === u2)
-  );
-}
-
-function filterByView(list, view, user) {
-  const items = Array.isArray(list) ? list : [];
-
-  if (view === "closed") {
-    return items.filter((x) => !!x?.closed_at || isClosedStatus(x?.status));
+function getToken() {
+  try {
+    return String(localStorage.getItem(TOKEN_KEY) || "").trim();
+  } catch {
+    return "";
   }
-
-  if (view === "assigned") {
-    // المسندة: ليست مكتملة + تخص المندوب
-    return items.filter((x) => !x?.closed_at && !isClosedStatus(x?.status) && belongsToAgent(x, user));
-  }
-
-  if (view === "new") {
-    // جديدة: غير مسندة وغير مكتملة
-    return items.filter((x) => !x?.closed_at && !isClosedStatus(x?.status) && !toStr(x?.agent_username) && !toStr(x?.agent_name));
-  }
-
-  if (view === "all") return items;
-
-  // افتراضي
-  return items;
 }
 
-function applySearch(list, q) {
-  const query = toStr(q).toLowerCase();
-  if (!query) return list;
-  return list.filter((x) => {
-    const hay = [
-      x?.id,
-      x?.customer_name,
-      x?.customer,
-      x?.phone,
-      x?.district,
-      x?.agent_name,
-      x?.agent_username,
-      x?.status,
-    ].map((v) => toStr(v).toLowerCase()).join(" | ");
-    return hay.includes(query);
+/** Fetch JSON with Bearer token (يحُل 401/403 عند نسيان الهيدر) */
+async function fetchJsonAuth(path, { method = "GET", body } = {}) {
+  const token = getToken();
+  const headers = { "content-type": "application/json" };
+  if (token) headers.authorization = "Bearer " + token;
+
+  const res = await fetch(path, {
+    method,
+    cache: "no-store",
+    headers,
+    body: body ? JSON.stringify(body) : undefined,
   });
-}
 
-async function fetchAllPages(basePath, { pageLimit = 200, maxPages = 25 } = {}) {
-  let all = [];
-  let total = null;
-  let offset = 0;
-
-  for (let i = 0; i < maxPages; i++) {
-    const sep = basePath.includes("?") ? "&" : "?";
-    const path = `${basePath}${sep}limit=${pageLimit}&offset=${offset}`;
-
-    const out = await apiGet(path);
-    const batch = out?.items || out?.data || out?.requests || [];
-    const count = out?.pagination?.count;
-
-    if (Number.isFinite(Number(count))) total = Number(count);
-
-    all = all.concat(Array.isArray(batch) ? batch : []);
-    offset += pageLimit;
-
-    // توقف ذكي
-    if (!batch || batch.length < pageLimit) break;
-    if (total != null && all.length >= total) break;
+  const txt = await res.text().catch(() => "");
+  let data = {};
+  try {
+    data = txt ? JSON.parse(txt) : {};
+  } catch {
+    data = { raw: txt };
   }
 
-  return { items: all, total };
+  if (!res.ok || data?.ok === false || data?.success === false) {
+    const msg = data?.error || `HTTP ${res.status}`;
+    const err = new Error(msg);
+    err.status = res.status;
+    err.data = data;
+    throw err;
+  }
+
+  return data;
+}
+
+function normalizeKey(v) {
+  // توحيد للمقارنة (عربي/انجليزي) بشكل آمن
+  return String(v ?? "")
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, " ");
+}
+
+function normalizeStatus(v) {
+  return String(v ?? "")
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, "");
+}
+
+function isTaskAssignedToUser(task, user) {
+  const uName = normalizeKey(user?.name);
+  const uUser = normalizeKey(user?.username);
+
+  // دعم أكثر من اسم حقل محتمل
+  const aName = normalizeKey(task?.agent_name ?? task?.agentName ?? task?.agent);
+  const aUser = normalizeKey(task?.agent_username ?? task?.agentUsername ?? task?.username);
+
+  if (!uName && !uUser) return false;
+
+  // ✅ الأفضل: agent_name
+  if (aName && (aName === uName || aName === uUser)) return true;
+
+  // احتياطي: agent_username
+  if (aUser && aUser === uUser) return true;
+
+  return false;
+}
+
+function filterAgentTasks(items, user, tab = "assigned") {
+  const mine = (Array.isArray(items) ? items : []).filter((t) =>
+    isTaskAssignedToUser(t, user)
+  );
+
+  const closedSet = new Set(
+    [
+      "مكتمل",
+      "مغلق",
+      "مقفول",
+      "تم",
+      "منتهي",
+      "ملغي",
+      "ملغى",
+      "cancelled",
+      "canceled",
+      "closed",
+      "done",
+      "completed",
+    ].map(normalizeStatus)
+  );
+
+  // التبويب الافتراضي: المسند/غير مكتمل
+  if (tab === "closed") {
+    return mine.filter((t) => closedSet.has(normalizeStatus(t?.status ?? t?.state)));
+  }
+
+  if (tab === "all") return mine;
+
+  // assigned
+  return mine.filter((t) => !closedSet.has(normalizeStatus(t?.status ?? t?.state)));
+}
+
+function getAgentTab(route) {
+  const tab = String(route?.query?.tab || "").trim();
+  return tab === "closed" || tab === "all" ? tab : "assigned";
+}
+
+function setAgentTabInHash(tab) {
+  tab = tab === "closed" || tab === "all" ? tab : "assigned";
+  goto(`#/agent?tab=${encodeURIComponent(tab)}`);
 }
 
 function showLogin(error = "") {
@@ -127,7 +155,132 @@ function showLogin(error = "") {
   });
 }
 
-function bindCommonTopBar() {
+/** رندر حسب الدور + حسب route */
+async function renderForUser(user) {
+  const route = parseRoute(getRoute());
+
+  if (route.name === "root") {
+    goto(roleToHome(user.role));
+    return;
+  }
+
+  // حماية: إذا فتح صفحة لا تخص دوره
+  const expected = roleToHome(user.role).replace("#/", "");
+  if (expected && route.name !== expected) {
+    goto(roleToHome(user.role));
+    return;
+  }
+
+  const pushStatus = await getPushStatus();
+
+  // ====== AGENT ======
+  if (route.name === "agent") {
+    const tab = getAgentTab(route);
+
+    setHtml(renderAgent({ user, pushStatus, tasks: [], tasksError: "" }));
+    bindCommonTopBar(user);
+
+    const loadTasks = async () => {
+      const currentRoute = parseRoute(getRoute());
+      const currentTab = getAgentTab(currentRoute);
+
+      try {
+        // ✅ نرسل agent_name كإشارة (حتى لو السيرفر تجاهلها ما تضر)
+        const agentName = String(user?.name || user?.username || "").trim();
+        const url =
+          "/api/requests?" +
+          new URLSearchParams({
+            tab: currentTab,
+            agent_name: agentName,
+          }).toString();
+
+        const out = await fetchJsonAuth(url);
+
+        const rawItems = out?.items || out?.data || out?.requests || [];
+        const filtered = filterAgentTasks(rawItems, user, currentTab);
+
+        let tasksError = "";
+        if (Array.isArray(rawItems) && rawItems.length > 0 && filtered.length === 0) {
+          tasksError =
+            `تم تحميل ${rawItems.length} طلب/طلبـات من السيرفر، ` +
+            `لكن لا يوجد أي طلب مطابق لهذا المندوب بعد التصفية. ` +
+            `تحقق من قيم agent_name في جدول requests وأنها تساوي اسم/يوزر المندوب الحالي.`;
+        }
+
+        setHtml(
+          renderAgent({
+            user,
+            pushStatus,
+            tasks: filtered,
+            tasksError,
+          })
+        );
+        bindCommonTopBar(user);
+        bindAgentButtons(loadTasks);
+      } catch (e) {
+        setHtml(
+          renderAgent({
+            user,
+            pushStatus,
+            tasks: [],
+            tasksError: e?.message || String(e),
+          })
+        );
+        bindCommonTopBar(user);
+        bindAgentButtons(loadTasks);
+      }
+    };
+
+    const bindAgentButtons = (loader) => {
+      const r1 = $app.querySelector("#btnAgentRefresh");
+      const r2 = $app.querySelector("#btnAgentShowTasks");
+      r1?.addEventListener("click", loader);
+      r2?.addEventListener("click", loader);
+
+      // ✅ دعم تبويبات لو موجودة في UI (أسماء مختلفة محتملة)
+      const tabAssigned =
+        $app.querySelector("#tabAssigned") ||
+        $app.querySelector("#btnAgentTabAssigned") ||
+        $app.querySelector("[data-agent-tab='assigned']");
+      const tabClosed =
+        $app.querySelector("#tabClosed") ||
+        $app.querySelector("#btnAgentTabClosed") ||
+        $app.querySelector("[data-agent-tab='closed']");
+      const tabAll =
+        $app.querySelector("#tabAll") ||
+        $app.querySelector("#btnAgentTabAll") ||
+        $app.querySelector("[data-agent-tab='all']");
+
+      tabAssigned?.addEventListener("click", () => setAgentTabInHash("assigned"));
+      tabClosed?.addEventListener("click", () => setAgentTabInHash("closed"));
+      tabAll?.addEventListener("click", () => setAgentTabInHash("all"));
+    };
+
+    bindAgentButtons(loadTasks);
+    loadTasks().catch(() => {});
+    return;
+  }
+
+  // ====== STAFF ======
+  if (route.name === "staff") {
+    setHtml(renderStaff({ user, pushStatus }));
+    bindCommonTopBar(user);
+    return;
+  }
+
+  // ====== ADMIN ======
+  if (route.name === "admin") {
+    setHtml(renderAdmin({ user, pushStatus }));
+    bindCommonTopBar(user);
+    return;
+  }
+
+  // fallback
+  setHtml(renderHome({ user, pushStatus }));
+  bindCommonTopBar(user);
+}
+
+function bindCommonTopBar(user) {
   const btnLogout = $app.querySelector("#btnLogout");
   const btnEnablePush = $app.querySelector("#btnEnablePush");
 
@@ -154,355 +307,14 @@ function bindCommonTopBar() {
   });
 }
 
-/* =========================
- * AGENT PAGE
- * ========================= */
-async function renderAgentPage(user) {
-  const pushStatus = await getPushStatus();
-
-  let view = "assigned"; // ✅ افتراضي: المسند فقط
-  let q = "";
-  let serverItems = [];
-  let shownItems = [];
-  let total = null;
-
-  const rerender = (err = "") => {
-    setHtml(renderAgent({
-      user,
-      pushStatus,
-      tasks: shownItems,
-      tasksError: err,
-      view,
-      q,
-      stats: { loaded: shownItems.length, total },
-    }));
-    bindCommonTopBar();
-    bindAgentHandlers();
-  };
-
-  const load = async () => {
-    try {
-      rerender(""); // يرسم الهيكل أولاً
-      // حتى لو السيرفر لا يدعم scope، نحن نفلتر محليًا
-      const out = await fetchAllPages(`/api/requests?scope=${encodeURIComponent(view)}`);
-      serverItems = out.items || [];
-      total = out.total;
-
-      const filtered = filterByView(serverItems, view, user);
-      shownItems = applySearch(filtered, q);
-
-      rerender("");
-    } catch (e) {
-      serverItems = [];
-      shownItems = [];
-      total = null;
-      rerender(e?.message || String(e));
-    }
-  };
-
-  function bindAgentHandlers() {
-    // Tabs
-    $app.querySelector("#tabAssigned")?.addEventListener("click", async () => {
-      view = "assigned";
-      await load();
-    });
-    $app.querySelector("#tabClosed")?.addEventListener("click", async () => {
-      view = "closed";
-      await load();
-    });
-
-    // Search
-    const $search = $app.querySelector("#agentSearch");
-    $search?.addEventListener("input", () => {
-      q = toStr($search.value);
-      const filtered = filterByView(serverItems, view, user);
-      shownItems = applySearch(filtered, q);
-      rerender("");
-    });
-
-    // Refresh
-    $app.querySelector("#btnAgentRefresh")?.addEventListener("click", load);
-
-    // Delegation for card buttons
-    $app.addEventListener("click", async (e) => {
-      const btn = e.target.closest("[data-act]");
-      if (!btn) return;
-
-      const act = btn.getAttribute("data-act");
-      const id = btn.getAttribute("data-id");
-      if (!id) return;
-
-      if (act === "saveWeight") {
-        const inp = $app.querySelector(`[data-weight-input="1"][data-id="${CSS.escape(id)}"]`);
-        const w = toStr(inp?.value);
-        try {
-          btn.disabled = true;
-          await apiPost("/api/requests", { action: "weight", id, weight: w });
-          await load();
-        } catch (err) {
-          alert(err?.message || String(err));
-        } finally {
-          btn.disabled = false;
-        }
-      }
-
-      if (act === "closeRequest") {
-        if (!confirm("تأكيد إغلاق الطلب؟")) return;
-        const inp = $app.querySelector(`[data-weight-input="1"][data-id="${CSS.escape(id)}"]`);
-        const w = toStr(inp?.value);
-        try {
-          btn.disabled = true;
-          await apiPost("/api/requests", { action: "close", id, weight: w });
-          await load();
-        } catch (err) {
-          alert(err?.message || String(err));
-        } finally {
-          btn.disabled = false;
-        }
-      }
-    }, { once: true }); // لأننا نعمل rerender كثير
-  }
-
-  // أول رندر ثم تحميل
-  rerender("");
-  await load();
-}
-
-/* =========================
- * STAFF PAGE
- * ========================= */
-async function renderStaffPage(user) {
-  const pushStatus = await getPushStatus();
-
-  let view = "new";
-  let q = "";
-  let agents = [];
-  let serverItems = [];
-  let shownItems = [];
-  let total = null;
-
-  const rerender = (err = "") => {
-    setHtml(renderStaff({
-      user,
-      pushStatus,
-      view,
-      q,
-      agents,
-      requests: shownItems,
-      err,
-      stats: { loaded: shownItems.length, total },
-    }));
-    bindCommonTopBar();
-    bindStaffHandlers();
-  };
-
-  const loadAgents = async () => {
-    try {
-      const out = await apiGet("/api/users?role=agent");
-      const items = out?.items || [];
-      agents = items.map((u) => ({
-        value: toStr(u.username),
-        label: `${toStr(u.name) || toStr(u.username)} (${toStr(u.username)})`,
-      }));
-    } catch {
-      agents = []; // fallback
-    }
-  };
-
-  const load = async () => {
-    try {
-      rerender("");
-      await loadAgents();
-
-      const out = await fetchAllPages(`/api/requests?scope=${encodeURIComponent(view)}`);
-      serverItems = out.items || [];
-      total = out.total;
-
-      const filtered = filterByView(serverItems, view, user);
-      shownItems = applySearch(filtered, q);
-
-      rerender("");
-    } catch (e) {
-      serverItems = [];
-      shownItems = [];
-      total = null;
-      rerender(e?.message || String(e));
-    }
-  };
-
-  function bindStaffHandlers() {
-    $app.querySelector("#tabStaffNew")?.addEventListener("click", async () => { view = "new"; await load(); });
-    $app.querySelector("#tabStaffAssigned")?.addEventListener("click", async () => { view = "assigned"; await load(); });
-    $app.querySelector("#tabStaffClosed")?.addEventListener("click", async () => { view = "closed"; await load(); });
-
-    const $search = $app.querySelector("#staffSearch");
-    $search?.addEventListener("input", () => {
-      q = toStr($search.value);
-      const filtered = filterByView(serverItems, view, user);
-      shownItems = applySearch(filtered, q);
-      rerender("");
-    });
-
-    $app.querySelector("#btnStaffRefresh")?.addEventListener("click", load);
-
-    // Assign
-    $app.addEventListener("click", async (e) => {
-      const btn = e.target.closest(`[data-act="assignRequest"]`);
-      if (!btn) return;
-
-      const id = btn.getAttribute("data-id");
-      const sel = $app.querySelector(`[data-agent-select="1"][data-id="${CSS.escape(id)}"]`);
-      const agentUsername = toStr(sel?.value);
-      if (!agentUsername) return alert("اختر مندوب أولاً");
-
-      const agent = agents.find((x) => x.value === agentUsername);
-      const agentName = agent ? agent.label.split(" (")[0] : agentUsername;
-
-      try {
-        btn.disabled = true;
-        await apiPost("/api/requests", {
-          action: "assign",
-          id,
-          agent_username: agentUsername,
-          agent_name: agentName,
-        });
-        await load();
-      } catch (err) {
-        alert(err?.message || String(err));
-      } finally {
-        btn.disabled = false;
-      }
-    }, { once: true });
-  }
-
-  rerender("");
-  await load();
-}
-
-/* =========================
- * ADMIN PAGE
- * ========================= */
-async function renderAdminPage(user) {
-  const pushStatus = await getPushStatus();
-
-  let view = "all";
-  let q = "";
-  let serverItems = [];
-  let shownItems = [];
-  let total = null;
-
-  const rerender = (err = "") => {
-    setHtml(renderAdmin({
-      user,
-      pushStatus,
-      view,
-      q,
-      requests: shownItems,
-      err,
-      stats: { loaded: shownItems.length, total },
-    }));
-    bindCommonTopBar();
-    bindAdminHandlers();
-  };
-
-  const load = async () => {
-    try {
-      rerender("");
-      const out = await fetchAllPages(`/api/requests?scope=${encodeURIComponent(view)}`);
-      serverItems = out.items || [];
-      total = out.total;
-
-      // مدير: فلترة حسب view محليًا
-      let filtered = serverItems;
-      if (view === "new") filtered = filterByView(serverItems, "new", user);
-      if (view === "assigned") {
-        filtered = serverItems.filter((x) => !x?.closed_at && !isClosedStatus(x?.status) && (toStr(x?.agent_username) || toStr(x?.agent_name)));
-      }
-      if (view === "closed") filtered = filterByView(serverItems, "closed", user);
-      if (view === "all") filtered = serverItems;
-
-      shownItems = applySearch(filtered, q);
-      rerender("");
-    } catch (e) {
-      serverItems = [];
-      shownItems = [];
-      total = null;
-      rerender(e?.message || String(e));
-    }
-  };
-
-  function bindAdminHandlers() {
-    $app.querySelector("#tabAdminAll")?.addEventListener("click", async () => { view = "all"; await load(); });
-    $app.querySelector("#tabAdminNew")?.addEventListener("click", async () => { view = "new"; await load(); });
-    $app.querySelector("#tabAdminAssigned")?.addEventListener("click", async () => { view = "assigned"; await load(); });
-    $app.querySelector("#tabAdminClosed")?.addEventListener("click", async () => { view = "closed"; await load(); });
-
-    const $search = $app.querySelector("#adminSearch");
-    $search?.addEventListener("input", () => {
-      q = toStr($search.value);
-      // إعادة تطبيق البحث على آخر نتائج محمّلة
-      let filtered = serverItems;
-      if (view === "new") filtered = filterByView(serverItems, "new", user);
-      if (view === "assigned") {
-        filtered = serverItems.filter((x) => !x?.closed_at && !isClosedStatus(x?.status) && (toStr(x?.agent_username) || toStr(x?.agent_name)));
-      }
-      if (view === "closed") filtered = filterByView(serverItems, "closed", user);
-      if (view === "all") filtered = serverItems;
-
-      shownItems = applySearch(filtered, q);
-      rerender("");
-    });
-
-    $app.querySelector("#btnAdminRefresh")?.addEventListener("click", load);
-  }
-
-  rerender("");
-  await load();
-}
-
-/* =========================
- * MAIN ROUTER
- * ========================= */
-async function renderForUser(user) {
-  const route = parseRoute(getRoute());
-
-  if (route.name === "root") {
-    goto(roleToHome(user.role));
-    return;
-  }
-
-  const expected = roleToHome(user.role).replace("#/", "");
-  if (expected && route.name !== expected) {
-    goto(roleToHome(user.role));
-    return;
-  }
-
-  if (route.name === "agent") {
-    await renderAgentPage(user);
-    return;
-  }
-
-  if (route.name === "staff") {
-    await renderStaffPage(user);
-    return;
-  }
-
-  if (route.name === "admin") {
-    await renderAdminPage(user);
-    return;
-  }
-
-  const pushStatus = await getPushStatus();
-  setHtml(renderHome({ user, pushStatus }));
-  bindCommonTopBar();
-}
-
 async function boot() {
   try {
     setHtml(renderLoading("تحميل الإعدادات..."));
     await loadAppConfig();
   } catch (e) {
-    setHtml(`<div class="alert">فشل تحميل الإعدادات: ${String(e?.message || e)}</div>`);
+    setHtml(
+      `<div class="alert">فشل تحميل الإعدادات: ${String(e?.message || e)}</div>`
+    );
     return;
   }
 
@@ -520,14 +332,17 @@ async function boot() {
   await renderForUser(user);
 }
 
+// عند تغير الهاش
 window.addEventListener("hashchange", async () => {
   const user = await me();
   if (!user) return showLogin();
   await renderForUser(user);
 });
 
+// زر تحديث عام (اختياري)
 $btnRefresh?.addEventListener("click", () => location.reload());
 
+// Service Worker
 if ("serviceWorker" in navigator) {
   navigator.serviceWorker.register("/service-worker.js").catch(() => {});
 }
