@@ -1,200 +1,166 @@
-import { ok, fail } from "../_lib/response.js";
-import { requireAuth } from "../_lib/auth.js";
+// functions/api/requests.js
 
-/**
- * Supabase REST helper (بدون الاعتماد على مكتبات إضافية)
- */
+function json(data, status = 200, headers = {}) {
+  return new Response(JSON.stringify(data), {
+    status,
+    headers: { "content-type": "application/json; charset=utf-8", ...headers },
+  });
+}
+
+function fail(msg, status = 400) {
+  return json({ ok: false, success: false, error: msg }, status);
+}
+
+function unauthorized(msg = "Unauthorized") {
+  return fail(msg, 401);
+}
+
+function pickJwtSecret(env) {
+  return String(env.JWT_SECRET || env.AUTH_JWT_SECRET || "").trim();
+}
+
 function pickSupabase(env) {
-  const url =
-    String(env.SUPABASE_URL || env.SUPABASE_REST_URL || "").trim();
-
-  const key =
-    String(
-      env.SUPABASE_SERVICE_ROLE_KEY ||
-      env.SUPABASE_SERVICE_KEY ||
-      env.SUPABASE_KEY ||
-      env.SUPABASE_ANON_KEY ||
-      ""
-    ).trim();
-
+  const url = String(env.SUPABASE_URL || "").trim();
+  const key = String(
+    env.SUPABASE_SERVICE_ROLE_KEY ||
+    env.SUPABASE_SERVICE_KEY ||
+    env.SUPABASE_KEY ||
+    env.SUPABASE_ANON_KEY ||
+    ""
+  ).trim();
   return { url, key };
 }
 
-function getCountFromContentRange(cr) {
-  // مثال: "0-49/123"
-  if (!cr) return null;
-  const m = String(cr).match(/\/(\d+)$/);
+function b64urlToU8(s) {
+  s = String(s || "").replace(/-/g, "+").replace(/_/g, "/");
+  const pad = s.length % 4 ? "=".repeat(4 - (s.length % 4)) : "";
+  const bin = atob(s + pad);
+  const u8 = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) u8[i] = bin.charCodeAt(i);
+  return u8;
+}
+
+async function hmacSha256(secret, data) {
+  const key = await crypto.subtle.importKey(
+    "raw",
+    new TextEncoder().encode(secret),
+    { name: "HMAC", hash: "SHA-256" },
+    false,
+    ["sign"]
+  );
+  const sig = await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(data));
+  return new Uint8Array(sig);
+}
+
+function constantTimeEqual(a, b) {
+  if (a.length !== b.length) return false;
+  let out = 0;
+  for (let i = 0; i < a.length; i++) out |= a[i] ^ b[i];
+  return out === 0;
+}
+
+async function verifyJwtHS256(token, secret) {
+  const parts = String(token || "").split(".");
+  if (parts.length !== 3) throw new Error("Bad token");
+  const [h, p, s] = parts;
+
+  const header = JSON.parse(new TextDecoder().decode(b64urlToU8(h)));
+  if ((header.alg || "").toUpperCase() !== "HS256") throw new Error("Bad alg");
+
+  const payload = JSON.parse(new TextDecoder().decode(b64urlToU8(p)));
+  if (payload.exp && Date.now() / 1000 > Number(payload.exp)) throw new Error("Token expired");
+
+  const data = `${h}.${p}`;
+  const expected = await hmacSha256(secret, data);
+  const given = b64urlToU8(s);
+
+  if (!constantTimeEqual(expected, given)) throw new Error("Bad signature");
+  return payload;
+}
+
+function getBearerToken(req) {
+  const auth = req.headers.get("authorization") || req.headers.get("Authorization") || "";
+  const m = String(auth).match(/^Bearer\s+(.+)$/i);
+  return m ? m[1].trim() : "";
+}
+
+function countFromContentRange(cr) {
+  // مثل: 0-49/123
+  const m = String(cr || "").match(/\/(\d+)$/);
   return m ? Number(m[1]) : null;
 }
 
-function normRole(r) {
-  const s = String(r || "").trim().toLowerCase();
-  if (s === "مدير" || s === "admin") return "admin";
-  if (s === "موظف" || s === "staff") return "staff";
-  if (s === "مندوب" || s === "agent") return "agent";
-  return s || "agent";
-}
+export async function onRequestGet({ request, env }) {
+  const secret = pickJwtSecret(env);
+  if (!secret) return fail("Missing JWT_SECRET in environment", 500);
 
-function buildOrForAgent(username) {
-  // جرّب أشهر الأعمدة المحتملة
-  const u = String(username || "").trim();
-  const parts = [
-    `agent_username.eq.${u}`,
-    `assigned_to.eq.${u}`,
-    `assigned_username.eq.${u}`,
-    `agent.eq.${u}`,
-    `username.eq.${u}`,
-  ];
-  return `(${parts.join(",")})`;
-}
+  const token = getBearerToken(request);
+  if (!token) return unauthorized("Missing Bearer token");
 
-async function supaGet(env, table, urlObj) {
-  const { url, key } = pickSupabase(env);
-  if (!url || !key) return { error: "Missing SUPABASE_URL or SUPABASE key" };
-
-  const endpoint = `${url.replace(/\/$/, "")}/rest/v1/${table}${urlObj.search}`;
-
-  const res = await fetch(endpoint, {
-    method: "GET",
-    headers: {
-      apikey: key,
-      authorization: `Bearer ${key}`,
-      accept: "application/json",
-      prefer: "count=exact",
-    },
-  });
-
-  const data = await res.json().catch(() => null);
-  if (!res.ok) {
-    return { error: data?.message || data?.hint || `Supabase HTTP ${res.status}`, status: res.status, data };
+  let user;
+  try {
+    user = await verifyJwtHS256(token, secret);
+  } catch (e) {
+    return unauthorized(e?.message || "Unauthorized");
   }
 
-  const count = getCountFromContentRange(res.headers.get("content-range"));
-  return { data: Array.isArray(data) ? data : [], count: count ?? null };
-}
+  const username = String(user.username || "").trim();
+  const role = String(user.role || "agent").trim().toLowerCase();
 
-export async function onRequestGet({ request, env }) {
-  const auth = await requireAuth(request, env);
-  if (auth.errorResponse) return auth.errorResponse;
-
-  const user = auth.user || {};
-  const role = normRole(user.role);
+  const { url: SB_URL, key: SB_KEY } = pickSupabase(env);
+  if (!SB_URL || !SB_KEY) return fail("Missing SUPABASE_URL / SUPABASE_KEY", 500);
 
   const u = new URL(request.url);
   const limit = Math.min(Math.max(Number(u.searchParams.get("limit") || 50), 1), 200);
   const offset = Math.max(Number(u.searchParams.get("offset") || 0), 0);
   const debug = u.searchParams.get("debug") === "1";
 
+  // ✅ جدولك اسمه requests (حسب الصورة)
   const table = String(env.REQUESTS_TABLE || "requests").trim();
 
-  // فلترة اختيارية من العميل (لو حبيت لاحقاً)
-  const qStatus = String(u.searchParams.get("status") || "").trim();
-  const qArea = String(u.searchParams.get("area_code") || "").trim();
+  const qs = new URLSearchParams();
+  qs.set("select", "*");
+  qs.set("order", "created_at.desc");
+  qs.set("limit", String(limit));
+  qs.set("offset", String(offset));
 
-  // ✅ source of truth للربط
-  const username = String(user.username || "").trim();
-  const area_code = qArea || (user.area_code ? String(user.area_code).trim() : "");
-
-  // base query
-  const base = new URLSearchParams();
-  base.set("select", "*");
-  base.set("limit", String(limit));
-  base.set("offset", String(offset));
-  // لو عندك created_at
-  base.set("order", "created_at.desc");
-
-  if (qStatus) {
-    // لو عندك عمود status
-    base.set("status", `eq.${qStatus}`);
-  }
-
-  // ✅ Admin: يرجع كل شيء
-  if (role === "admin") {
-    const urlObj = new URL("http://x/"); // placeholder
-    urlObj.search = "?" + base.toString();
-
-    const r = await supaGet(env, table, urlObj);
-    if (r.error) return fail(r.error, r.status || 500);
-
-    return ok({
-      items: r.data,
-      pagination: { limit, offset, count: r.count ?? r.data.length },
-      role,
-      ...(debug ? { debug: { role, username, area_code, status: qStatus } } : {}),
-    });
-  }
-
-  // ✅ Agent: (assigned_to = username) OR (area_code match + unassigned)
-  if (role === "agent") {
+  // ✅ الفلترة الصحيحة للمندوب (حسب أعمدة جدولك)
+  if (role === "agent" || role === "مندوب") {
     if (!username) return fail("Missing username in token", 400);
-
-    // 1) assigned to me
-    const urlAssigned = new URL("http://x/");
-    const p1 = new URLSearchParams(base);
-    p1.set("or", buildOrForAgent(username));
-    urlAssigned.search = "?" + p1.toString();
-
-    const assigned = await supaGet(env, table, urlAssigned);
-    if (assigned.error) return fail(assigned.error, assigned.status || 500);
-
-    let items = assigned.data;
-
-    // 2) fallback: unassigned within area_code
-    if (area_code) {
-      const urlUnassigned = new URL("http://x/");
-      const p2 = new URLSearchParams(base);
-
-      // عدّل أسماء الأعمدة حسب جدولك:
-      p2.set("area_code", `eq.${area_code}`);
-      // نفترض assigned_to موجود
-      p2.set("assigned_to", "is.null");
-
-      urlUnassigned.search = "?" + p2.toString();
-
-      const unassigned = await supaGet(env, table, urlUnassigned);
-      if (!unassigned.error) {
-        // دمج بدون تكرار
-        const seen = new Set(items.map((x) => String(x.id || x.code || JSON.stringify(x))));
-        for (const it of unassigned.data) {
-          const key = String(it.id || it.code || JSON.stringify(it));
-          if (!seen.has(key)) items.push(it);
-        }
-      }
-    }
-
-    return ok({
-      items,
-      pagination: { limit, offset, count: items.length },
-      role,
-      ...(debug ? { debug: { role, username, area_code, status: qStatus } } : {}),
-    });
+    qs.set("agent_username", `eq.${username}`);
+    // اختيارياً: لا تجلب الملغاة/المغلقة إن أحببت
+    // qs.set("cancelled_at", "is.null");
+    // qs.set("closed_at", "is.null");
   }
 
-  // ✅ Staff: فلترة بالمنطقة إذا موجودة
-  if (role === "staff") {
-    const urlObj = new URL("http://x/");
-    const p = new URLSearchParams(base);
+  // admin: بدون فلترة
+  // staff: إن رغبت فلترة حسب district/area_code تحتاج عمود لذلك (غير ظاهر في جدولك)
 
-    if (area_code) p.set("area_code", `eq.${area_code}`);
+  const endpoint = `${SB_URL.replace(/\/$/, "")}/rest/v1/${table}?${qs.toString()}`;
 
-    urlObj.search = "?" + p.toString();
+  const res = await fetch(endpoint, {
+    method: "GET",
+    headers: {
+      apikey: SB_KEY,
+      authorization: `Bearer ${SB_KEY}`,
+      accept: "application/json",
+      prefer: "count=exact",
+    },
+  });
 
-    const r = await supaGet(env, table, urlObj);
-    if (r.error) return fail(r.error, r.status || 500);
-
-    return ok({
-      items: r.data,
-      pagination: { limit, offset, count: r.count ?? r.data.length },
-      role,
-      ...(debug ? { debug: { role, username, area_code, status: qStatus } } : {}),
-    });
+  const data = await res.json().catch(() => []);
+  if (!res.ok) {
+    return fail(data?.message || data?.hint || `Supabase HTTP ${res.status}`, res.status);
   }
 
-  // fallback
-  return ok({
-    items: [],
-    pagination: { limit, offset, count: 0 },
-    role,
-    ...(debug ? { debug: { role, username, area_code, status: qStatus } } : {}),
+  const total = countFromContentRange(res.headers.get("content-range")) ?? (Array.isArray(data) ? data.length : 0);
+
+  return json({
+    ok: true,
+    success: true,
+    items: Array.isArray(data) ? data : [],
+    pagination: { limit, offset, count: total },
+    role: role === "مندوب" ? "agent" : role,
+    ...(debug ? { debug: { username, role, filter: role === "agent" || role === "مندوب" ? { agent_username: username } : "none" } } : {}),
   });
 }
