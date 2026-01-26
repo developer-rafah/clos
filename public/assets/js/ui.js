@@ -1,4 +1,4 @@
-// UI MODULE
+// public/assets/js/ui.js
 
 export function escapeHtml(s) {
   return String(s || "").replace(/[&<>"']/g, (ch) => ({
@@ -33,7 +33,7 @@ export function renderLogin({ error = "" } = {}) {
   return renderShell(`
     <div>
       <h1 class="h1">تسجيل الدخول</h1>
-      <div class="muted">لا يوجد جلسة أو انتهت.. سجل دخولك من الواجهة.</div>
+      <div class="muted">سجّل دخولك للوصول للطلبات.</div>
 
       <div class="hr"></div>
 
@@ -44,9 +44,9 @@ export function renderLogin({ error = "" } = {}) {
         <div class="label">كلمة المرور</div>
         <input class="input" name="password" type="password" autocomplete="current-password" />
 
-        <div class="row" style="margin-top:14px;align-items:center;gap:10px;flex-wrap:wrap;">
+        <div class="row" style="margin-top:14px;align-items:center;gap:10px;">
           <button class="btn" type="submit">دخول</button>
-          <span class="small">لن يتم تسجيل الخروج إلا عند اختيار ذلك يدويًا.</span>
+          <span class="small">سيتم حفظ الجلسة تلقائيًا.</span>
         </div>
 
         ${error ? `<div class="alert" style="margin-top:14px;">${escapeHtml(error)}</div>` : ``}
@@ -58,7 +58,6 @@ export function renderLogin({ error = "" } = {}) {
 export function bindLogin(root, onSubmit) {
   const form = root.querySelector("#loginForm");
   if (!form) return;
-
   form.addEventListener("submit", (e) => {
     e.preventDefault();
     const fd = new FormData(form);
@@ -67,6 +66,41 @@ export function bindLogin(root, onSubmit) {
       password: String(fd.get("password") || "").trim(),
     });
   });
+}
+
+function pillStatus(status) {
+  const s = String(status || "").trim();
+  const color =
+    s === "مكتمل" ? "#22c55e" :
+    s === "ملغي"  ? "#ef4444" :
+    s === "جديد"  ? "#3b82f6" : "#a855f7";
+
+  return `<span class="pill" style="border-color:${color};color:${color}">${escapeHtml(s || "—")}</span>`;
+}
+
+function googleMapEmbed(lat, lng) {
+  const la = Number(lat), ln = Number(lng);
+  if (!Number.isFinite(la) || !Number.isFinite(ln)) return "";
+  const q = encodeURIComponent(`${la},${ln}`);
+  return `
+    <div style="margin-top:10px;border-radius:14px;overflow:hidden;border:1px solid rgba(255,255,255,.12)">
+      <iframe
+        loading="lazy"
+        referrerpolicy="no-referrer-when-downgrade"
+        style="width:100%;height:220px;border:0"
+        src="https://www.google.com/maps?q=${q}&z=15&output=embed">
+      </iframe>
+    </div>
+  `;
+}
+
+function toE164SA(phone) {
+  const p = String(phone || "").replace(/\D+/g, "");
+  if (!p) return "";
+  if (p.startsWith("966")) return p;
+  if (p.startsWith("05") && p.length === 10) return "966" + p.slice(1);
+  if (p.startsWith("5") && p.length === 9) return "966" + p;
+  return "";
 }
 
 function renderTopBar({ user }) {
@@ -87,141 +121,96 @@ function renderTopBar({ user }) {
   `;
 }
 
-function normalizePhone(phone) {
-  const raw = String(phone || "").trim();
-  if (!raw) return "";
-  // إزالة كل ما عدا الأرقام
-  let p = raw.replace(/[^\d]/g, "");
-  // السعودية: لو 9 أرقام يبدأ 5 => أضف 966
-  if (p.length === 9 && p.startsWith("5")) p = "966" + p;
-  // لو يبدأ 05 => 9665...
-  if (p.length === 10 && p.startsWith("05")) p = "966" + p.slice(1);
-  return p;
-}
-
-function isClosedStatus(status) {
-  const s = String(status || "").trim();
-  return /مكتمل|مغلق|منجز|تم|مغلقه|منتهي/i.test(s);
-}
-
-function statusPill(status) {
-  const s = String(status || "").trim() || "—";
-  const closed = isClosedStatus(s);
-  const bg = closed ? "rgba(70,200,120,.18)" : "rgba(120,140,255,.18)";
-  const bd = closed ? "rgba(70,200,120,.35)" : "rgba(120,140,255,.35)";
-  return `<span class="pill" style="border-color:${bd};background:${bg};">${escapeHtml(s)}</span>`;
-}
-
-function mapEmbed(lat, lng) {
-  const la = Number(lat), ln = Number(lng);
-  if (!isFinite(la) || !isFinite(ln)) return "";
-  const src = `https://maps.google.com/maps?q=${encodeURIComponent(`${la},${ln}`)}&z=16&output=embed`;
+function renderKpis(kpis = {}) {
+  const box = (title, val) => `
+    <div class="col" style="min-width:160px;padding:12px;border:1px solid rgba(255,255,255,.12);border-radius:14px">
+      <div class="small muted">${escapeHtml(title)}</div>
+      <div class="strong" style="font-size:22px;margin-top:6px">${escapeHtml(val)}</div>
+    </div>
+  `;
   return `
-    <div style="margin-top:10px;border-radius:12px;overflow:hidden;border:1px solid rgba(255,255,255,.12);">
-      <iframe
-        title="map"
-        width="100%"
-        height="220"
-        loading="lazy"
-        referrerpolicy="no-referrer-when-downgrade"
-        src="${src}"></iframe>
+    <div class="row" style="gap:10px;flex-wrap:wrap;margin-top:10px">
+      ${box("الإجمالي", kpis.total ?? "—")}
+      ${box("الجديد", kpis.new ?? "—")}
+      ${box("المسند", kpis.assigned ?? "—")}
+      ${box("المكتمل", kpis.closed ?? "—")}
     </div>
   `;
 }
 
-function renderAgentRequestCard(t) {
-  const id = escapeHtml(t?.id || "");
-  const customer = escapeHtml(t?.customer_name || t?.customer || "عميل");
-  const district = escapeHtml(t?.district || "—");
-  const phone = String(t?.phone || "").trim();
-  const phoneEN = normalizePhone(phone);
-  const phoneLabel = escapeHtml(phone || "—");
-  const status = t?.status || "";
-  const weightVal = (t?.weight ?? "");
-  const lat = t?.lat, lng = t?.lng;
-  const notes = escapeHtml(t?.notes || "");
-  const closed = !!t?.closed_at || isClosedStatus(status);
-
-  const callHref = phoneEN ? `tel:${phoneEN}` : "#";
-  const waHref = phoneEN ? `https://wa.me/${phoneEN}` : "#";
-  const mapHref = (isFinite(Number(lat)) && isFinite(Number(lng)))
-    ? `https://www.google.com/maps?q=${encodeURIComponent(`${lat},${lng}`)}`
-    : "";
-
-  return `
-    <div class="list__item" style="padding:14px;">
-      <div class="row" style="justify-content:space-between;gap:12px;align-items:flex-start;flex-wrap:wrap;">
-        <div style="min-width:220px;">
-          <div class="strong" style="font-size:16px;">${customer}</div>
-          <div class="small muted" style="margin-top:4px;">${id}</div>
-        </div>
-        <div class="row" style="gap:8px;align-items:center;flex-wrap:wrap;">
-          ${statusPill(status)}
-          <span class="pill">${escapeHtml(district)}</span>
-        </div>
-      </div>
-
-      <div class="row" style="margin-top:12px;gap:10px;flex-wrap:wrap;">
-        <a class="btn btn--ghost" ${phoneEN ? `href="${callHref}"` : `aria-disabled="true"`} target="_self">اتصال</a>
-        <a class="btn btn--ghost" ${phoneEN ? `href="${waHref}"` : `aria-disabled="true"`} target="_blank" rel="noopener">واتساب</a>
-        <a class="btn btn--ghost" ${mapHref ? `href="${mapHref}"` : `aria-disabled="true"`} target="_blank" rel="noopener">الخريطة</a>
-      </div>
-
-      <div class="row" style="margin-top:10px;gap:10px;flex-wrap:wrap;align-items:center;">
-        <div class="small muted">الجوال: <span style="color:#fff">${phoneLabel}</span></div>
-        <div class="small muted">الحي/العنوان: <span style="color:#fff">${district}</span></div>
-      </div>
-
-      ${notes ? `<div class="small muted" style="margin-top:8px;">ملاحظات: <span style="color:#fff">${notes}</span></div>` : ``}
-
-      <div class="row" style="margin-top:12px;gap:10px;flex-wrap:wrap;align-items:center;">
-        <input
-          class="input"
-          style="max-width:160px;"
-          inputmode="numeric"
-          placeholder="الوزن"
-          data-weight-input="1"
-          data-id="${id}"
-          value="${escapeHtml(weightVal)}" />
-        <button class="btn" type="button" data-act="saveWeight" data-id="${id}">حفظ الوزن</button>
-
-        <button class="btn ${closed ? "btn--ghost" : "btn--danger"}" type="button"
-          data-act="closeRequest"
-          data-id="${id}"
-          ${closed ? "disabled" : ""}>
-          ${closed ? "مغلق ✅" : "إغلاق الطلب"}
-        </button>
-      </div>
-
-      ${mapEmbed(lat, lng)}
-    </div>
-  `;
-}
-
+/** ====== AGENT ====== */
 export function renderAgent({
   user,
   pushStatus = "",
-  tasks = [],
-  tasksError = "",
   view = "assigned",
   q = "",
-  stats = { loaded: 0, total: null },
+  kpis = {},
+  items = [],
+  error = "",
+  pagination = { limit: 50, offset: 0, count: 0 },
 } = {}) {
   const tabs = `
-    <div class="row" style="gap:10px;flex-wrap:wrap;">
-      <button id="tabAssigned" class="btn ${view === "assigned" ? "" : "btn--ghost"}" type="button">المسندة</button>
-      <button id="tabClosed" class="btn ${view === "closed" ? "" : "btn--ghost"}" type="button">المكتملة</button>
+    <div class="row" style="gap:10px;flex-wrap:wrap;justify-content:flex-end">
+      <button class="btn ${view === "assigned" ? "" : "btn--ghost"}" data-action="agentTab" data-view="assigned">المسندة</button>
+      <button class="btn ${view === "closed" ? "" : "btn--ghost"}" data-action="agentTab" data-view="closed">المكتملة</button>
+      <button class="btn ${view === "all" ? "" : "btn--ghost"}" data-action="agentTab" data-view="all">الكل</button>
     </div>
   `;
 
-  const tasksHtml = tasksError
-    ? `<div class="alert">${escapeHtml(tasksError)}</div>`
-    : (!tasks || tasks.length === 0)
-      ? `<div class="muted">لا توجد طلبات حالياً.</div>`
-      : `<div class="list">${tasks.map(renderAgentRequestCard).join("")}</div>`;
+  const list =
+    error
+      ? `<div class="alert">${escapeHtml(error)}</div>`
+      : items.length === 0
+        ? `<div class="muted">لا توجد طلبات حالياً.</div>`
+        : `
+          <div class="list">
+            ${items.map((r) => {
+              const id = r.id ?? "";
+              const name = r.customer_name ?? r.customer_nam ?? "—";
+              const phone = r.phone ?? "";
+              const e164 = toE164SA(phone);
+              const district = r.district ?? "—";
+              const status = r.status ?? "—";
+              const weight = (r.weight ?? "").toString();
+              const mapsBtn = (Number.isFinite(Number(r.lat)) && Number.isFinite(Number(r.lng)))
+                ? `<a class="btn btn--ghost" target="_blank" rel="noreferrer" href="https://www.google.com/maps?q=${encodeURIComponent(r.lat + "," + r.lng)}">الخريطة</a>`
+                : `<button class="btn btn--ghost" disabled>الخريطة</button>`;
 
-  const totalTxt = (stats?.total == null) ? "—" : String(stats.total);
-  const loadedTxt = String(stats?.loaded ?? (tasks?.length ?? 0));
+              return `
+                <div class="list__item" style="padding:14px">
+                  <div class="row" style="justify-content:space-between;gap:10px;align-items:flex-start;flex-wrap:wrap">
+                    <div>
+                      <div class="strong" style="font-size:18px">${escapeHtml(name)}</div>
+                      <div class="small muted" style="margin-top:6px">الحي: ${escapeHtml(district)}</div>
+                      <div class="small muted">الجوال: ${escapeHtml(phone || "—")}</div>
+                    </div>
+                    <div style="text-align:left">
+                      ${pillStatus(status)}
+                      <div class="pill" style="margin-top:8px">${escapeHtml(id)}</div>
+                    </div>
+                  </div>
+
+                  <div class="row" style="gap:10px;flex-wrap:wrap;margin-top:12px">
+                    <a class="btn btn--ghost" href="${phone ? `tel:${escapeHtml(phone)}` : "#"}" ${phone ? "" : "disabled"}>اتصال</a>
+                    <a class="btn btn--ghost" target="_blank" rel="noreferrer" href="${e164 ? `https://wa.me/${e164}` : "#"}" ${e164 ? "" : "disabled"}>واتساب</a>
+                    ${mapsBtn}
+                  </div>
+
+                  <div class="row" style="gap:10px;flex-wrap:wrap;align-items:center;margin-top:12px">
+                    <input class="input" style="max-width:160px" inputmode="numeric" placeholder="الوزن" value="${escapeHtml(weight)}" data-weight-input="${escapeHtml(id)}" />
+                    <button class="btn" data-action="saveWeight" data-id="${escapeHtml(id)}">حفظ الوزن</button>
+                    <button class="btn btn--danger" data-action="closeReq" data-id="${escapeHtml(id)}">إغلاق الطلب</button>
+                  </div>
+
+                  ${googleMapEmbed(r.lat, r.lng)}
+                </div>
+              `;
+            }).join("")}
+          </div>
+        `;
+
+  const shown = Math.min(pagination.offset + items.length, pagination.count || (pagination.offset + items.length));
+  const canLoadMore = pagination.count != null && (pagination.offset + items.length) < pagination.count;
 
   return renderShell(`
     ${renderTopBar({ user })}
@@ -229,116 +218,105 @@ export function renderAgent({
     <div class="hr"></div>
 
     <h2 class="h2">لوحة المندوب</h2>
-    <div class="muted">تظهر هنا الطلبات المسندة لك فقط (مع إمكانية عرض المكتملة).</div>
+    <div class="muted">تظهر هنا طلباتك المسندة فقط (مع إمكانية عرض المكتملة).</div>
+
+    ${renderKpis(kpis)}
 
     <div class="hr"></div>
 
-    <div class="row" style="justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;">
-      ${tabs}
+    ${tabs}
 
-      <div class="row" style="gap:10px;align-items:center;flex-wrap:wrap;">
-        <input id="agentSearch" class="input" style="min-width:220px;" placeholder="بحث (اسم/رقم/حي/رقم طلب)" value="${escapeHtml(q)}" />
-        <button id="btnAgentRefresh" class="btn" type="button">تحديث</button>
-        <span class="small muted">المعروض: ${escapeHtml(loadedTxt)} / ${escapeHtml(totalTxt)}</span>
-      </div>
+    <div class="row" style="gap:10px;flex-wrap:wrap;margin-top:12px;align-items:center">
+      <input id="agentSearch" class="input" placeholder="بحث (اسم/رقم/جوال/حي...)" value="${escapeHtml(q)}" />
+      <button class="btn" data-action="agentRefresh">تحديث</button>
+      <div class="small muted" style="margin-inline-start:auto">المعروض: ${shown}/${escapeHtml(pagination.count ?? "—")}</div>
     </div>
 
     <div class="hr"></div>
 
-    <div id="agentTasks">${tasksHtml}</div>
+    <div id="agentList">
+      ${list}
+    </div>
+
+    ${canLoadMore ? `
+      <div class="hr"></div>
+      <button class="btn btn--ghost" data-action="loadMore">تحميل المزيد</button>
+    ` : ``}
 
     <div class="hr"></div>
-
     <div class="pill">🔔 الإشعارات</div>
     <div class="small" style="margin-top:10px;">${escapeHtml(pushStatus || "—")}</div>
   `);
 }
 
-function renderSelectOptions(items, selectedValue) {
-  const sel = String(selectedValue ?? "");
-  return (items || []).map((x) => {
-    const v = String(x.value ?? x.username ?? "");
-    const label = String(x.label ?? x.name ?? x.username ?? "");
-    return `<option value="${escapeHtml(v)}" ${v === sel ? "selected" : ""}>${escapeHtml(label)}</option>`;
-  }).join("");
-}
-
-function renderStaffRequestCard(t, agents) {
-  const id = escapeHtml(t?.id || "");
-  const customer = escapeHtml(t?.customer_name || t?.customer || "عميل");
-  const district = escapeHtml(t?.district || "—");
-  const phone = escapeHtml(t?.phone || "—");
-  const status = t?.status || "—";
-
-  return `
-    <div class="list__item" style="padding:14px;">
-      <div class="row" style="justify-content:space-between;gap:12px;align-items:flex-start;flex-wrap:wrap;">
-        <div>
-          <div class="strong">${customer}</div>
-          <div class="small muted">${id}</div>
-        </div>
-        ${statusPill(status)}
-      </div>
-
-      <div class="row" style="margin-top:10px;gap:10px;flex-wrap:wrap;">
-        <div class="small muted">الجوال: <span style="color:#fff">${phone}</span></div>
-        <div class="small muted">الحي: <span style="color:#fff">${district}</span></div>
-      </div>
-
-      <div class="row" style="margin-top:12px;gap:10px;flex-wrap:wrap;align-items:center;">
-        <select class="input" data-agent-select="1" data-id="${id}" style="min-width:220px;">
-          <option value="">اختر مندوب...</option>
-          ${renderSelectOptions(agents, "")}
-        </select>
-        <button class="btn" type="button" data-act="assignRequest" data-id="${id}">إسناد</button>
-      </div>
-    </div>
-  `;
-}
-
+/** ====== STAFF ====== */
 export function renderStaff({
   user,
   pushStatus = "",
   view = "new",
   q = "",
-  requests = [],
+  kpis = {},
   agents = [],
-  err = "",
-  stats = { loaded: 0, total: null },
+  items = [],
+  error = "",
+  pagination = { limit: 50, offset: 0, count: 0 },
 } = {}) {
   const tabs = `
-    <div class="row" style="gap:10px;flex-wrap:wrap;">
-      <button id="tabStaffNew" class="btn ${view === "new" ? "" : "btn--ghost"}" type="button">طلبات جديدة</button>
-      <button id="tabStaffAssigned" class="btn ${view === "assigned" ? "" : "btn--ghost"}" type="button">طلبات مسندة</button>
-      <button id="tabStaffClosed" class="btn ${view === "closed" ? "" : "btn--ghost"}" type="button">مكتملة</button>
+    <div class="row" style="gap:10px;flex-wrap:wrap;justify-content:flex-end">
+      <button class="btn ${view === "new" ? "" : "btn--ghost"}" data-action="staffTab" data-view="new">طلبات جديدة</button>
+      <button class="btn ${view === "assigned" ? "" : "btn--ghost"}" data-action="staffTab" data-view="assigned">طلبات مسندة</button>
+      <button class="btn ${view === "closed" ? "" : "btn--ghost"}" data-action="staffTab" data-view="closed">مكتملة</button>
+      <button class="btn ${view === "all" ? "" : "btn--ghost"}" data-action="staffTab" data-view="all">الكل</button>
     </div>
   `;
 
-  const listHtml = err
-    ? `<div class="alert">${escapeHtml(err)}</div>`
-    : (!requests || requests.length === 0)
-      ? `<div class="muted">لا توجد بيانات.</div>`
-      : `<div class="list">${
-          view === "new"
-            ? requests.map((t) => renderStaffRequestCard(t, agents)).join("")
-            : requests.map((t) => `
-                <div class="list__item" style="padding:14px;">
-                  <div class="row" style="justify-content:space-between;gap:12px;flex-wrap:wrap;">
+  const agentOptions = [`<option value="">— اختر مندوب —</option>`]
+    .concat(agents.map((a) => `<option value="${escapeHtml(a.username)}">${escapeHtml(a.name || a.username)} (${escapeHtml(a.username)})</option>`))
+    .join("");
+
+  const list =
+    error
+      ? `<div class="alert">${escapeHtml(error)}</div>`
+      : items.length === 0
+        ? `<div class="muted">لا توجد طلبات.</div>`
+        : `
+          <div class="list">
+            ${items.map((r) => {
+              const id = r.id ?? "";
+              const name = r.customer_name ?? "—";
+              const phone = r.phone ?? "";
+              const district = r.district ?? "—";
+              const status = r.status ?? "—";
+              const agentName = r.agent_name ?? "";
+              return `
+                <div class="list__item" style="padding:14px">
+                  <div class="row" style="justify-content:space-between;gap:10px;align-items:flex-start;flex-wrap:wrap">
                     <div>
-                      <div class="strong">${escapeHtml(t.customer_name || t.customer || "عميل")}</div>
-                      <div class="small muted">${escapeHtml(t.id || "")}</div>
+                      <div class="strong">${escapeHtml(name)}</div>
+                      <div class="small muted">الحي: ${escapeHtml(district)} | الجوال: ${escapeHtml(phone || "—")}</div>
+                      <div class="small muted">المندوب: <b>${escapeHtml(agentName || "—")}</b></div>
                     </div>
-                    <div class="row" style="gap:8px;flex-wrap:wrap;align-items:center;">
-                      ${statusPill(t.status)}
-                      <span class="pill">${escapeHtml(t.agent_name || t.agent_username || "—")}</span>
+                    <div style="text-align:left">
+                      ${pillStatus(status)}
+                      <div class="pill" style="margin-top:8px">${escapeHtml(id)}</div>
                     </div>
                   </div>
-                </div>
-              `).join("")
-        }</div>`;
 
-  const totalTxt = (stats?.total == null) ? "—" : String(stats.total);
-  const loadedTxt = String(stats?.loaded ?? (requests?.length ?? 0));
+                  <div class="row" style="gap:10px;flex-wrap:wrap;align-items:center;margin-top:12px">
+                    <select class="input" style="max-width:260px" data-assign-select="${escapeHtml(id)}">
+                      ${agentOptions}
+                    </select>
+                    <button class="btn" data-action="assign" data-id="${escapeHtml(id)}">إسناد</button>
+                    <button class="btn btn--danger" data-action="unassign" data-id="${escapeHtml(id)}">إلغاء الإسناد</button>
+                  </div>
+                </div>
+              `;
+            }).join("")}
+          </div>
+        `;
+
+  const shown = Math.min(pagination.offset + items.length, pagination.count || (pagination.offset + items.length));
+  const canLoadMore = pagination.count != null && (pagination.offset + items.length) < pagination.count;
 
   return renderShell(`
     ${renderTopBar({ user })}
@@ -346,69 +324,64 @@ export function renderStaff({
     <div class="hr"></div>
 
     <h2 class="h2">لوحة الموظف</h2>
-    <div class="muted">استقبال الطلبات الجديدة وإسنادها للمندوبين، مع عرض المسند/المكتمل.</div>
+    <div class="muted">استقبال الطلبات وإسنادها للمندوبين.</div>
+
+    ${renderKpis(kpis)}
 
     <div class="hr"></div>
+    ${tabs}
 
-    <div class="row" style="justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;">
-      ${tabs}
-      <div class="row" style="gap:10px;align-items:center;flex-wrap:wrap;">
-        <input id="staffSearch" class="input" style="min-width:220px;" placeholder="بحث..." value="${escapeHtml(q)}" />
-        <button id="btnStaffRefresh" class="btn" type="button">تحديث</button>
-        <span class="small muted">المعروض: ${escapeHtml(loadedTxt)} / ${escapeHtml(totalTxt)}</span>
-      </div>
+    <div class="row" style="gap:10px;flex-wrap:wrap;margin-top:12px;align-items:center">
+      <input id="staffSearch" class="input" placeholder="بحث..." value="${escapeHtml(q)}" />
+      <button class="btn" data-action="staffRefresh">تحديث</button>
+      <div class="small muted" style="margin-inline-start:auto">المعروض: ${shown}/${escapeHtml(pagination.count ?? "—")}</div>
     </div>
 
     <div class="hr"></div>
 
-    <div id="staffList">${listHtml}</div>
+    <div id="staffList">${list}</div>
+
+    ${canLoadMore ? `
+      <div class="hr"></div>
+      <button class="btn btn--ghost" data-action="staffLoadMore">تحميل المزيد</button>
+    ` : ``}
 
     <div class="hr"></div>
-
     <div class="pill">🔔 الإشعارات</div>
     <div class="small" style="margin-top:10px;">${escapeHtml(pushStatus || "—")}</div>
   `);
 }
 
+/** ====== ADMIN ====== */
 export function renderAdmin({
   user,
   pushStatus = "",
-  q = "",
   view = "all",
-  requests = [],
-  err = "",
-  stats = { loaded: 0, total: null },
+  q = "",
+  kpis = {},
+  items = [],
+  error = "",
 } = {}) {
-  const tabs = `
-    <div class="row" style="gap:10px;flex-wrap:wrap;">
-      <button id="tabAdminAll" class="btn ${view === "all" ? "" : "btn--ghost"}" type="button">الكل</button>
-      <button id="tabAdminNew" class="btn ${view === "new" ? "" : "btn--ghost"}" type="button">جديد</button>
-      <button id="tabAdminAssigned" class="btn ${view === "assigned" ? "" : "btn--ghost"}" type="button">مسند</button>
-      <button id="tabAdminClosed" class="btn ${view === "closed" ? "" : "btn--ghost"}" type="button">مكتمل</button>
-    </div>
-  `;
-
-  const listHtml = err
-    ? `<div class="alert">${escapeHtml(err)}</div>`
-    : (!requests || requests.length === 0)
-      ? `<div class="muted">لا توجد بيانات.</div>`
-      : `<div class="list">${requests.map((t) => `
-          <div class="list__item" style="padding:14px;">
-            <div class="row" style="justify-content:space-between;gap:12px;flex-wrap:wrap;">
-              <div>
-                <div class="strong">${escapeHtml(t.customer_name || t.customer || "عميل")}</div>
-                <div class="small muted">${escapeHtml(t.id || "")}</div>
+  const list =
+    error
+      ? `<div class="alert">${escapeHtml(error)}</div>`
+      : items.length === 0
+        ? `<div class="muted">لا توجد بيانات.</div>`
+        : `
+          <div class="list">
+            ${items.slice(0, 20).map((r) => `
+              <div class="list__item">
+                <div class="row" style="justify-content:space-between;gap:10px;align-items:center">
+                  <div>
+                    <div class="strong">${escapeHtml(r.customer_name || "—")}</div>
+                    <div class="small muted">الحالة: ${escapeHtml(r.status || "—")} | المندوب: ${escapeHtml(r.agent_name || "—")}</div>
+                  </div>
+                  <div class="pill">${escapeHtml(r.id || "")}</div>
+                </div>
               </div>
-              <div class="row" style="gap:8px;align-items:center;flex-wrap:wrap;">
-                ${statusPill(t.status)}
-                <span class="pill">${escapeHtml(t.agent_name || t.agent_username || "غير مسند")}</span>
-              </div>
-            </div>
+            `).join("")}
           </div>
-        `).join("")}</div>`;
-
-  const totalTxt = (stats?.total == null) ? "—" : String(stats.total);
-  const loadedTxt = String(stats?.loaded ?? (requests?.length ?? 0));
+        `;
 
   return renderShell(`
     ${renderTopBar({ user })}
@@ -416,51 +389,27 @@ export function renderAdmin({
     <div class="hr"></div>
 
     <h2 class="h2">لوحة المدير</h2>
-    <div class="muted">عرض شامل للطلبات مع فلاتر (الكل/جديد/مسند/مكتمل).</div>
+    <div class="muted">مؤشرات سريعة + آخر الطلبات (20).</div>
+
+    ${renderKpis(kpis)}
 
     <div class="hr"></div>
 
-    <div class="row" style="justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;">
-      ${tabs}
-      <div class="row" style="gap:10px;align-items:center;flex-wrap:wrap;">
-        <input id="adminSearch" class="input" style="min-width:220px;" placeholder="بحث..." value="${escapeHtml(q)}" />
-        <button id="btnAdminRefresh" class="btn" type="button">تحديث</button>
-        <span class="small muted">المعروض: ${escapeHtml(loadedTxt)} / ${escapeHtml(totalTxt)}</span>
-      </div>
+    <div class="row" style="gap:10px;flex-wrap:wrap;align-items:center">
+      <input id="adminSearch" class="input" placeholder="بحث..." value="${escapeHtml(q)}" />
+      <button class="btn" data-action="adminRefresh">تحديث</button>
+      <button class="btn btn--ghost" data-action="adminTab" data-view="new">جديد</button>
+      <button class="btn btn--ghost" data-action="adminTab" data-view="assigned">مسند</button>
+      <button class="btn btn--ghost" data-action="adminTab" data-view="closed">مكتمل</button>
+      <button class="btn" data-action="adminTab" data-view="all">الكل</button>
     </div>
 
     <div class="hr"></div>
 
-    <div id="adminList">${listHtml}</div>
+    ${list}
 
     <div class="hr"></div>
-
     <div class="pill">🔔 الإشعارات</div>
     <div class="small" style="margin-top:10px;">${escapeHtml(pushStatus || "—")}</div>
-  `);
-}
-
-export function renderHome({ user, pushStatus = "" } = {}) {
-  return renderShell(`
-    ${renderTopBar({ user })}
-
-    <div class="hr"></div>
-
-    <div class="row">
-      <div class="col">
-        <div class="pill">✅ الواجهة جاهزة</div>
-        <div class="small" style="margin-top:10px;">
-          استخدم القائمة حسب الدور لعرض الصفحات.
-        </div>
-      </div>
-      <div class="col">
-        <div class="pill">🔔 الإشعارات</div>
-        <div class="small" style="margin-top:10px;">${escapeHtml(pushStatus || "—")}</div>
-      </div>
-    </div>
-
-    <div class="hr"></div>
-
-    <div class="muted">هذه صفحة عامة.</div>
   `);
 }
