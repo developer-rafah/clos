@@ -7,11 +7,17 @@ export async function onRequestGet({ request, env }) {
 
   const { user } = auth;
 
-  // ✅ اجعل token مصدره مرنًا (لضمان عدم رجوع undefined)
+  // token مرن
   const token = auth.token || user.token || "";
 
+  // ✅ رجّع area_code حتى نعرف هل موجود فعلاً داخل JWT
   return ok({
-    user: { username: user.username, name: user.name || "", role: user.role },
+    user: {
+      username: user.username,
+      name: user.name || "",
+      role: user.role,
+      area_code: user.area_code ?? null,
+    },
     token,
   });
 }
