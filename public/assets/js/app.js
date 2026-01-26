@@ -2,7 +2,6 @@
 
 import { loadAppConfig } from "./app-config.js";
 import { me, login, logout } from "./auth.js";
-import { apiGet } from "./api.js";
 import { roleToHome, goto, parseRoute, getRoute } from "./router.js";
 import {
   renderLogin,
@@ -18,8 +17,46 @@ import { enablePush, getPushStatus } from "./push.js";
 const $app = document.getElementById("app");
 const $btnRefresh = document.getElementById("btnRefresh");
 
+const TOKEN_KEY = "CLOS_TOKEN_V1";
+
 function setHtml(html) {
   $app.innerHTML = html;
+}
+
+function getToken() {
+  try {
+    return String(localStorage.getItem(TOKEN_KEY) || "").trim();
+  } catch {
+    return "";
+  }
+}
+
+/** Fetch JSON with Bearer token */
+async function fetchJsonAuth(path, { method = "GET", body } = {}) {
+  const token = getToken();
+  const headers = { "content-type": "application/json" };
+  if (token) headers.authorization = "Bearer " + token;
+
+  const res = await fetch(path, {
+    method,
+    cache: "no-store",
+    headers,
+    body: body ? JSON.stringify(body) : undefined,
+  });
+
+  const txt = await res.text().catch(() => "");
+  let data = {};
+  try { data = txt ? JSON.parse(txt) : {}; } catch { data = { raw: txt }; }
+
+  if (!res.ok || data?.ok === false || data?.success === false) {
+    const msg = data?.error || `HTTP ${res.status}`;
+    const err = new Error(msg);
+    err.status = res.status;
+    err.data = data;
+    throw err;
+  }
+
+  return data;
 }
 
 function showLogin(error = "") {
@@ -28,7 +65,6 @@ function showLogin(error = "") {
     try {
       setHtml(renderLoading("جاري تسجيل الدخول..."));
       const u = await login(username, password);
-
       goto(roleToHome(u.role));
       await renderForUser(u);
     } catch (e) {
@@ -37,12 +73,98 @@ function showLogin(error = "") {
   });
 }
 
-function normalizeTasks(out) {
-  const candidates = [out?.items, out?.data, out?.requests, out];
-  for (const c of candidates) {
-    if (Array.isArray(c)) return c;
-  }
-  return [];
+function setInlineMsg(id, msg) {
+  const el = $app.querySelector(`[data-msg="${CSS.escape(String(id))}"]`);
+  if (el) el.textContent = msg || "";
+}
+
+function bindAgentTaskActions(loadTasks) {
+  // حفظ الوزن
+  $app.querySelectorAll(`[data-action="saveWeight"]`).forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      const id = btn.dataset.id;
+      const input = $app.querySelector(`[data-weight-input="${CSS.escape(String(id))}"]`);
+      const raw = input ? String(input.value || "").trim() : "";
+      const weight = raw === "" ? null : Number(raw);
+
+      if (raw !== "" && (Number.isNaN(weight) || weight < 0)) {
+        setInlineMsg(id, "الوزن غير صالح.");
+        return;
+      }
+
+      try {
+        btn.disabled = true;
+        setInlineMsg(id, "جاري حفظ الوزن...");
+        await fetchJsonAuth("/api/requests", {
+          method: "POST",
+          body: { id, patch: { weight } },
+        });
+        setInlineMsg(id, "تم حفظ الوزن ✅");
+        await loadTasks();
+      } catch (e) {
+        setInlineMsg(id, e?.message || "فشل حفظ الوزن");
+      } finally {
+        btn.disabled = false;
+      }
+    });
+  });
+
+  // إغلاق الطلب
+  $app.querySelectorAll(`[data-action="closeRequest"]`).forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      const id = btn.dataset.id;
+      if (btn.disabled) return;
+
+      const ok = confirm("هل أنت متأكد من إغلاق الطلب؟");
+      if (!ok) return;
+
+      try {
+        btn.disabled = true;
+        setInlineMsg(id, "جاري إغلاق الطلب...");
+        await fetchJsonAuth("/api/requests", {
+          method: "POST",
+          body: {
+            id,
+            patch: {
+              status: "مكتمل",
+              closed_at: new Date().toISOString(),
+            },
+          },
+        });
+        setInlineMsg(id, "تم إغلاق الطلب ✅");
+        await loadTasks();
+      } catch (e) {
+        setInlineMsg(id, e?.message || "فشل إغلاق الطلب");
+        btn.disabled = false;
+      }
+    });
+  });
+}
+
+function bindCommonTopBar(user) {
+  const btnLogout = $app.querySelector("#btnLogout");
+  const btnEnablePush = $app.querySelector("#btnEnablePush");
+
+  btnLogout?.addEventListener("click", async () => {
+    await logout();
+    location.hash = "#/";
+    showLogin("تم تسجيل الخروج.");
+  });
+
+  btnEnablePush?.addEventListener("click", async () => {
+    try {
+      btnEnablePush.disabled = true;
+      btnEnablePush.textContent = "جاري التفعيل...";
+      await enablePush();
+      const u = await me();
+      if (!u) return showLogin();
+      await renderForUser(u);
+    } catch (e) {
+      btnEnablePush.disabled = false;
+      btnEnablePush.textContent = "تفعيل الإشعارات";
+      alert(e?.message || String(e));
+    }
+  });
 }
 
 /** رندر حسب الدور + حسب route */
@@ -68,42 +190,36 @@ async function renderForUser(user) {
 
     const loadTasks = async () => {
       try {
-        // ✅ موحد عبر apiGet + auth:true
-        const out = await apiGet("/api/requests", { auth: true });
-        const items = normalizeTasks(out);
-
+        const out = await fetchJsonAuth("/api/requests");
+        const items = out?.items || out?.data || out?.requests || [];
         setHtml(renderAgent({ user, pushStatus, tasks: items, tasksError: "" }));
         bindCommonTopBar(user);
-        bindAgentButtons(loadTasks);
-      } catch (e) {
-        // ✅ لو الجلسة انتهت: رجّع المستخدم لتسجيل الدخول
-        if (e?.status === 401 || e?.status === 403) {
-          await logout();
-          showLogin("انتهت الجلسة. فضلاً أعد تسجيل الدخول.");
-          return;
-        }
 
-        setHtml(
-          renderAgent({
-            user,
-            pushStatus,
-            tasks: [],
-            tasksError: e?.message || String(e),
-          })
-        );
+        // زرّين التحديث
+        const r1 = $app.querySelector("#btnAgentRefresh");
+        const r2 = $app.querySelector("#btnAgentShowTasks");
+        r1?.addEventListener("click", loadTasks);
+        r2?.addEventListener("click", loadTasks);
+
+        // ✅ أزرار الوزن/الإغلاق
+        bindAgentTaskActions(loadTasks);
+      } catch (e) {
+        setHtml(renderAgent({ user, pushStatus, tasks: [], tasksError: e?.message || String(e) }));
         bindCommonTopBar(user);
-        bindAgentButtons(loadTasks);
+
+        const r1 = $app.querySelector("#btnAgentRefresh");
+        const r2 = $app.querySelector("#btnAgentShowTasks");
+        r1?.addEventListener("click", loadTasks);
+        r2?.addEventListener("click", loadTasks);
       }
     };
 
-    const bindAgentButtons = (loader) => {
-      const r1 = $app.querySelector("#btnAgentRefresh");
-      const r2 = $app.querySelector("#btnAgentShowTasks");
-      r1?.addEventListener("click", loader);
-      r2?.addEventListener("click", loader);
-    };
+    // اربط أزرار التحديث أولاً
+    const r1 = $app.querySelector("#btnAgentRefresh");
+    const r2 = $app.querySelector("#btnAgentShowTasks");
+    r1?.addEventListener("click", loadTasks);
+    r2?.addEventListener("click", loadTasks);
 
-    bindAgentButtons(loadTasks);
     loadTasks().catch(() => {});
     return;
   }
@@ -122,33 +238,6 @@ async function renderForUser(user) {
 
   setHtml(renderHome({ user, pushStatus }));
   bindCommonTopBar(user);
-}
-
-function bindCommonTopBar(user) {
-  const btnLogout = $app.querySelector("#btnLogout");
-  const btnEnablePush = $app.querySelector("#btnEnablePush");
-
-  btnLogout?.addEventListener("click", async () => {
-    await logout();
-    location.hash = "#/";
-    showLogin("تم تسجيل الخروج.");
-  });
-
-  btnEnablePush?.addEventListener("click", async () => {
-    try {
-      btnEnablePush.disabled = true;
-      btnEnablePush.textContent = "جاري التفعيل...";
-      await enablePush();
-
-      const u = await me();
-      if (!u) return showLogin();
-      await renderForUser(u);
-    } catch (e) {
-      btnEnablePush.disabled = false;
-      btnEnablePush.textContent = "تفعيل الإشعارات";
-      alert(e?.message || String(e));
-    }
-  });
 }
 
 async function boot() {
