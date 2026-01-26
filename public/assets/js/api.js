@@ -23,13 +23,7 @@ function getTokenCompat() {
   } catch {}
 
   // 2) من التخزين (الأهم عندك)
-  const keys = [
-    "CLOS_TOKEN_V1",
-    "CLOS_TOKEN",
-    "AUTH_TOKEN",
-    "auth_token",
-    "token",
-  ];
+  const keys = ["CLOS_TOKEN_V1", "CLOS_TOKEN", "AUTH_TOKEN", "auth_token", "token"];
 
   try {
     for (const k of keys) {
@@ -50,7 +44,7 @@ function getTokenCompat() {
 
 function withAuthHeaders(headers = {}, { auth = "auto" } = {}) {
   // auth: "auto" => أرسل التوكن إذا موجود
-  // auth: true   => لازم توكن (لو غير موجود لا يرسل لكن لاحقاً ستأخذ 401)
+  // auth: true   => لازم توكن
   // auth: false  => لا ترسل توكن
   const token = getTokenCompat();
   const shouldSend = auth === true || (auth === "auto" && !!token);
@@ -85,10 +79,7 @@ export async function apiPost(path, body, opts = {}) {
   const res = await fetch(path, {
     method: "POST",
     cache: "no-store",
-    headers: withAuthHeaders(
-      { "content-type": "application/json" },
-      opts
-    ),
+    headers: withAuthHeaders({ "content-type": "application/json" }, opts),
     body: JSON.stringify(body ?? {}),
   });
 
@@ -125,4 +116,3 @@ export function debugToken() {
     key: "CLOS_TOKEN_V1",
   };
 }
-
