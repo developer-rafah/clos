@@ -10,6 +10,55 @@ export function escapeHtml(s) {
   }[ch]));
 }
 
+function normalizePhoneDigits(raw) {
+  // للتيل/واتساب: نزيل كل شيء غير رقم
+  let d = String(raw || "").replace(/\D/g, "");
+  // تحويل 05xxxxxxxx إلى 9665xxxxxxx (اختياري ومفيد للواتساب)
+  if (d.startsWith("0")) d = "966" + d.slice(1);
+  if (d.startsWith("9660")) d = "966" + d.slice(4);
+  return d;
+}
+
+function buildMapUrl(t) {
+  const lat = t?.lat ?? t?.latitude ?? null;
+  const lng = t?.lng ?? t?.longitude ?? t?.long ?? null;
+
+  const hasCoords =
+    lat !== null && lng !== null &&
+    lat !== "" && lng !== "" &&
+    !Number.isNaN(Number(lat)) &&
+    !Number.isNaN(Number(lng));
+
+  if (hasCoords) {
+    const la = Number(lat);
+    const ln = Number(lng);
+    return {
+      link: `https://www.google.com/maps?q=${encodeURIComponent(la + "," + ln)}`,
+      embed: `https://www.google.com/maps?q=${encodeURIComponent(la + "," + ln)}&z=16&output=embed`,
+      hasCoords: true,
+    };
+  }
+
+  // fallback: بحث بالحي/الاسم/الجوال
+  const q = t?.district || t?.customer_name || t?.customer_nan || t?.phone || "";
+  return {
+    link: `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(q)}`,
+    embed: "",
+    hasCoords: false,
+  };
+}
+
+function pickCustomerName(t) {
+  return (
+    t?.customer_name ??
+    t?.customer_nan ??
+    t?.customer_nam ??
+    t?.customer ??
+    t?.client_name ??
+    ""
+  );
+}
+
 export function renderShell(contentHtml) {
   return `
     <div class="app">
@@ -87,6 +136,96 @@ function renderTopBar({ user }) {
   `;
 }
 
+/** بطاقة طلب للمندوب */
+function renderRequestCard(t) {
+  const id = String(t?.id ?? t?.code ?? "").trim();
+  const status = String(t?.status ?? t?.state ?? "").trim();
+  const customer = String(pickCustomerName(t) || "—");
+  const phoneRaw = String(t?.phone ?? t?.mobile ?? t?.customer_phone ?? "").trim();
+  const phoneDigits = normalizePhoneDigits(phoneRaw);
+  const district = String(t?.district ?? t?.address ?? "—");
+  const notes = String(t?.notes ?? "").trim();
+  const weight = (t?.weight ?? "") === null ? "" : String(t?.weight ?? "");
+
+  const map = buildMapUrl(t);
+
+  return `
+    <div class="list__item" style="padding:14px;">
+      <div class="row" style="justify-content:space-between;gap:10px;align-items:flex-start;flex-wrap:wrap;">
+        <div style="min-width:240px;">
+          <div class="strong">${escapeHtml(customer)}</div>
+          <div class="small muted" style="margin-top:4px;">
+            الحالة: <span class="pill">${escapeHtml(status || "—")}</span>
+            <span class="pill" style="margin-inline-start:8px;">${escapeHtml(id)}</span>
+          </div>
+          <div class="small" style="margin-top:10px;line-height:1.8;">
+            <div>📞 الجوال: <span class="strong">${escapeHtml(phoneRaw || "—")}</span></div>
+            <div>📍 الحي/العنوان: <span class="strong">${escapeHtml(district)}</span></div>
+            ${notes ? `<div>📝 ملاحظات: <span class="strong">${escapeHtml(notes)}</span></div>` : ``}
+          </div>
+        </div>
+
+        <div style="flex:1;min-width:260px;">
+          <div class="row" style="gap:10px;flex-wrap:wrap;justify-content:flex-end;">
+            ${phoneDigits
+              ? `
+                <a class="btn btn--ghost" href="tel:${escapeHtml(phoneDigits)}">اتصال</a>
+                <a class="btn btn--ghost" target="_blank" rel="noopener" href="https://wa.me/${escapeHtml(phoneDigits)}">واتساب</a>
+              `
+              : `<span class="small muted">لا يوجد رقم صالح للاتصال</span>`
+            }
+            <a class="btn btn--ghost" target="_blank" rel="noopener" href="${escapeHtml(map.link)}">الخريطة</a>
+          </div>
+
+          <div class="hr" style="margin:12px 0;"></div>
+
+          <div class="row" style="gap:10px;flex-wrap:wrap;justify-content:flex-end;align-items:center;">
+            <input
+              class="input"
+              style="max-width:140px;"
+              inputmode="numeric"
+              placeholder="الوزن"
+              value="${escapeHtml(weight)}"
+              data-weight-input="${escapeHtml(id)}"
+            />
+            <button class="btn" type="button" data-action="saveWeight" data-id="${escapeHtml(id)}">حفظ الوزن</button>
+
+            <button
+              class="btn btn--danger"
+              type="button"
+              data-action="closeRequest"
+              data-id="${escapeHtml(id)}"
+              ${status === "مكتمل" ? "disabled" : ""}
+            >
+              ${status === "مكتمل" ? "مغلق ✅" : "إغلاق الطلب"}
+            </button>
+          </div>
+
+          <div class="small muted" style="margin-top:8px;text-align:end;" data-msg="${escapeHtml(id)}"></div>
+
+          ${
+            map.hasCoords && map.embed
+              ? `
+                <div style="margin-top:12px;border-radius:12px;overflow:hidden;border:1px solid rgba(255,255,255,0.08);">
+                  <iframe
+                    title="map-${escapeHtml(id)}"
+                    src="${escapeHtml(map.embed)}"
+                    width="100%"
+                    height="180"
+                    style="border:0;"
+                    loading="lazy"
+                    referrerpolicy="no-referrer-when-downgrade"
+                  ></iframe>
+                </div>
+              `
+              : `<div class="small muted" style="margin-top:10px;text-align:end;">لا توجد إحداثيات دقيقة — تم فتح الخريطة بالبحث.</div>`
+          }
+        </div>
+      </div>
+    </div>
+  `;
+}
+
 /** لوحة المندوب */
 export function renderAgent({ user, pushStatus = "", tasks = [], tasksError = "" } = {}) {
   const tasksHtml = tasksError
@@ -95,17 +234,7 @@ export function renderAgent({ user, pushStatus = "", tasks = [], tasksError = ""
       ? `<div class="muted">لا توجد مهام حالياً.</div>`
       : `
         <div class="list">
-          ${tasks.map((t) => `
-            <div class="list__item">
-              <div class="row" style="justify-content:space-between;gap:10px;align-items:center;">
-                <div>
-                  <div class="strong">${escapeHtml(t.title ?? t.name ?? "مهمة")}</div>
-                  <div class="small muted">${escapeHtml(t.status ?? t.state ?? "")}</div>
-                </div>
-                <div class="pill">${escapeHtml(t.id ?? t.code ?? "")}</div>
-              </div>
-            </div>
-          `).join("")}
+          ${tasks.map(renderRequestCard).join("")}
         </div>
       `;
 
