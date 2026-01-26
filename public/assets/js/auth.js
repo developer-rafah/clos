@@ -1,3 +1,4 @@
+// public/assets/js/auth.js
 import { apiGet, apiPost } from "./api.js";
 
 const LS_ME = "CLOS_ME_V1";
@@ -25,14 +26,18 @@ export async function me() {
   } catch {
     const raw = localStorage.getItem(LS_ME);
     if (raw) {
-      try { return JSON.parse(raw); } catch {}
+      try {
+        return JSON.parse(raw);
+      } catch {}
     }
     return null;
   }
 }
 
 export async function logout() {
-  try { await apiPost("/api/auth/logout", {}); } catch {}
+  try {
+    await apiPost("/api/auth/logout", {});
+  } catch {}
   localStorage.removeItem(LS_ME);
   localStorage.removeItem(LS_TOKEN);
 }
