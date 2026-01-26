@@ -18,12 +18,22 @@ export function goto(hash) {
   location.hash = target;
 }
 
+/**
+ * Parse hash routes like:
+ *  "#/"            => { name: "root", path: "/" }
+ *  "#/agent"       => { name: "agent", path: "/agent" }
+ *  "#/agent?id=1"  => { name: "agent", path: "/agent", query: { id:"1" } }
+ */
 export function parseRoute(hash = getRoute()) {
   const h = String(hash || "#/").trim();
   const noHash = h.startsWith("#") ? h.slice(1) : h;
   const [pathRaw, queryRaw] = noHash.split("?");
+
   const path = pathRaw || "/";
-  const name = path === "/" ? "root" : path.replace(/^\//, "").split("/")[0] || "root";
+  const name =
+    path === "/"
+      ? "root"
+      : path.replace(/^\//, "").split("/")[0] || "root";
 
   const query = {};
   if (queryRaw) {
