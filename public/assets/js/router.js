@@ -1,12 +1,15 @@
 // public/assets/js/router.js
 
 export function roleToHome(role) {
-  const r = String(role || "").trim();
-  if (r === "مدير") return "#/admin";
-  if (r === "موظف") return "#/staff";
-  if (r === "مندوب") return "#/agent";
+  const r = String(role || "").trim().toLowerCase();
+
+  if (r === "مدير" || r === "admin") return "#/admin";
+  if (r === "موظف" || r === "staff") return "#/staff";
+  if (r === "مندوب" || r === "agent") return "#/agent";
+
   return "#/staff";
 }
+
 
 export function getRoute() {
   return location.hash || "#/";
