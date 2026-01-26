@@ -1,116 +1,67 @@
 // public/assets/js/api.js
 
-async function parseJsonSafe(res) {
-  const txt = await res.text().catch(() => "");
-  if (!txt) return {};
+const TOKEN_KEY = "CLOS_TOKEN_V1";
+
+export function getToken() {
   try {
-    return JSON.parse(txt);
+    return String(localStorage.getItem(TOKEN_KEY) || "").trim();
   } catch {
-    return { raw: txt };
+    return "";
   }
 }
 
-/** ✅ توكن متوافق (يدعم عدة مفاتيح) — بدون circular imports */
-function getTokenCompat() {
-  const keys = ["CLOS_TOKEN_V1", "CLOS_TOKEN", "AUTH_TOKEN", "auth_token", "token"];
-
+export function setToken(token) {
   try {
-    for (const k of keys) {
-      const v = String(localStorage.getItem(k) || "").trim();
-      if (v) return v;
-    }
+    localStorage.setItem(TOKEN_KEY, String(token || "").trim());
   } catch {}
-
-  try {
-    for (const k of keys) {
-      const v = String(sessionStorage.getItem(k) || "").trim();
-      if (v) return v;
-    }
-  } catch {}
-
-  return "";
 }
 
-function withAuthHeaders(headers = {}, { auth = "auto" } = {}) {
-  // auth: "auto" => أرسل التوكن إذا موجود
-  // auth: true   => لازم توكن (لو غير موجود: ارمي خطأ واضح)
-  // auth: false  => لا ترسل توكن
-  const token = getTokenCompat();
+export function clearToken() {
+  try {
+    localStorage.removeItem(TOKEN_KEY);
+  } catch {}
+}
 
-  if (auth === true && !token) {
-    const err = new Error("انتهت الجلسة أو لا يوجد توكن. فضلاً أعد تسجيل الدخول.");
-    err.status = 401;
+export async function apiFetch(path, { method = "GET", body, headers = {} } = {}) {
+  const token = getToken();
+  const h = { ...headers };
+
+  // JSON افتراضي
+  if (!h["content-type"] && !(body instanceof FormData)) {
+    h["content-type"] = "application/json";
+  }
+
+  if (token) h.authorization = "Bearer " + token;
+
+  const res = await fetch(path, {
+    method,
+    cache: "no-store",
+    headers: h,
+    body: body
+      ? body instanceof FormData
+        ? body
+        : JSON.stringify(body)
+      : undefined,
+  });
+
+  const txt = await res.text().catch(() => "");
+  let data = {};
+  try {
+    data = txt ? JSON.parse(txt) : {};
+  } catch {
+    data = { raw: txt };
+  }
+
+  if (!res.ok || data?.ok === false || data?.success === false) {
+    const err = new Error(data?.error || `HTTP ${res.status}`);
+    err.status = res.status;
+    err.data = data;
     throw err;
   }
 
-  const shouldSend = auth === true || (auth === "auto" && !!token);
-  if (!shouldSend || !token) return headers;
-
-  return {
-    ...headers,
-    Authorization: `Bearer ${token}`, // استخدمنا الشكل القياسي
-  };
-}
-
-function throwIfNotOk(res, data) {
-  if (res.ok && data?.ok !== false && data?.success !== false) return;
-
-  const deeper = data?.gas?.error || data?.gas?.message;
-  const msg = deeper || data?.error || data?.message || `HTTP ${res.status}`;
-
-  const err = new Error(msg);
-  err.status = res.status;
-  err.data = data;
-  throw err;
-}
-
-export async function apiGet(path, opts = {}) {
-  const res = await fetch(path, {
-    method: "GET",
-    cache: "no-store",
-    headers: withAuthHeaders({}, opts),
-  });
-  const data = await parseJsonSafe(res);
-  throwIfNotOk(res, data);
   return data;
 }
 
-export async function apiPost(path, body, opts = {}) {
-  const res = await fetch(path, {
-    method: "POST",
-    cache: "no-store",
-    headers: withAuthHeaders({ "content-type": "application/json" }, opts),
-    body: JSON.stringify(body ?? {}),
-  });
-
-  const data = await parseJsonSafe(res);
-  throwIfNotOk(res, data);
-  return data;
-}
-
-/** ✅ Proxy to GAS */
-export async function gas(action, payload, opts = {}) {
-  action = String(action || "").trim();
-  if (!action) throw new Error("Missing action");
-
-  // auth.* و donate لا يحتاجون token
-  const isPublic = action === "donate" || action.startsWith("auth.");
-
-  const out = await apiPost(
-    "/api/gas",
-    { action, payload: payload ?? {} },
-    { auth: isPublic ? "auto" : true, ...opts }
-  );
-
-  return out?.gas ?? out;
-}
-
-// ✅ للمساعدة في الاختبارات من الكونسول
-export function debugToken() {
-  const t = getTokenCompat();
-  return {
-    hasToken: !!t,
-    tokenPreview: t ? t.slice(0, 20) + "..." : "",
-    key: "CLOS_TOKEN_V1",
-  };
-}
+export const apiGet = (p) => apiFetch(p, { method: "GET" });
+export const apiPost = (p, b) => apiFetch(p, { method: "POST", body: b });
+export const apiPatch = (p, b) => apiFetch(p, { method: "PATCH", body: b });
