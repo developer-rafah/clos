@@ -1,5 +1,4 @@
 // public/assets/js/api.js
-import { getToken as getTokenFromAuth } from "./auth.js";
 
 async function parseJsonSafe(res) {
   const txt = await res.text().catch(() => "");
@@ -11,18 +10,8 @@ async function parseJsonSafe(res) {
   }
 }
 
-/** ✅ توكن متوافق (يدعم CLOS_TOKEN_V1) */
+/** ✅ توكن متوافق (يدعم عدة مفاتيح) — بدون circular imports */
 function getTokenCompat() {
-  // 1) من auth.js إن وُجد
-  try {
-    const t1 =
-      typeof getTokenFromAuth === "function"
-        ? String(getTokenFromAuth() || "").trim()
-        : "";
-    if (t1) return t1;
-  } catch {}
-
-  // 2) من التخزين (الأهم عندك)
   const keys = ["CLOS_TOKEN_V1", "CLOS_TOKEN", "AUTH_TOKEN", "auth_token", "token"];
 
   try {
@@ -44,24 +33,35 @@ function getTokenCompat() {
 
 function withAuthHeaders(headers = {}, { auth = "auto" } = {}) {
   // auth: "auto" => أرسل التوكن إذا موجود
-  // auth: true   => لازم توكن
+  // auth: true   => لازم توكن (لو غير موجود: ارمي خطأ واضح)
   // auth: false  => لا ترسل توكن
   const token = getTokenCompat();
-  const shouldSend = auth === true || (auth === "auto" && !!token);
 
+  if (auth === true && !token) {
+    const err = new Error("انتهت الجلسة أو لا يوجد توكن. فضلاً أعد تسجيل الدخول.");
+    err.status = 401;
+    throw err;
+  }
+
+  const shouldSend = auth === true || (auth === "auto" && !!token);
   if (!shouldSend || !token) return headers;
 
   return {
     ...headers,
-    authorization: `Bearer ${token}`,
+    Authorization: `Bearer ${token}`, // استخدمنا الشكل القياسي
   };
 }
 
 function throwIfNotOk(res, data) {
-  if (!res.ok || data?.ok === false || data?.success === false) {
-    const deeper = data?.gas?.error || data?.gas?.message;
-    throw new Error(deeper || data?.error || `HTTP ${res.status}`);
-  }
+  if (res.ok && data?.ok !== false && data?.success !== false) return;
+
+  const deeper = data?.gas?.error || data?.gas?.message;
+  const msg = deeper || data?.error || data?.message || `HTTP ${res.status}`;
+
+  const err = new Error(msg);
+  err.status = res.status;
+  err.data = data;
+  throw err;
 }
 
 export async function apiGet(path, opts = {}) {
@@ -96,14 +96,12 @@ export async function gas(action, payload, opts = {}) {
   // auth.* و donate لا يحتاجون token
   const isPublic = action === "donate" || action.startsWith("auth.");
 
-  // إذا ليس public: لازم نرسل Bearer
   const out = await apiPost(
     "/api/gas",
     { action, payload: payload ?? {} },
     { auth: isPublic ? "auto" : true, ...opts }
   );
 
-  // Worker يرجع { ok, success, gas, status }
   return out?.gas ?? out;
 }
 
