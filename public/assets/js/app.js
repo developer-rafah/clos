@@ -2,6 +2,7 @@
 
 import { loadAppConfig } from "./app-config.js";
 import { me, login, logout } from "./auth.js";
+import { apiGet } from "./api.js";
 import { roleToHome, goto, parseRoute, getRoute } from "./router.js";
 import {
   renderLogin,
@@ -17,51 +18,8 @@ import { enablePush, getPushStatus } from "./push.js";
 const $app = document.getElementById("app");
 const $btnRefresh = document.getElementById("btnRefresh");
 
-const TOKEN_KEY = "CLOS_TOKEN_V1";
-
 function setHtml(html) {
   $app.innerHTML = html;
-}
-
-function getToken() {
-  try {
-    return String(localStorage.getItem(TOKEN_KEY) || "").trim();
-  } catch {
-    return "";
-  }
-}
-
-/** Fetch JSON with Bearer token (يحُل 401/403 عند نسيان الهيدر) */
-async function fetchJsonAuth(path, { method = "GET", body } = {}) {
-  const token = getToken();
-  const headers = { "content-type": "application/json" };
-  if (token) headers.authorization = "Bearer " + token;
-
-  const res = await fetch(path, {
-    method,
-    cache: "no-store",
-    headers,
-    body: body ? JSON.stringify(body) : undefined,
-  });
-
-  // اقرأ JSON أو نص
-  const txt = await res.text().catch(() => "");
-  let data = {};
-  try {
-    data = txt ? JSON.parse(txt) : {};
-  } catch {
-    data = { raw: txt };
-  }
-
-  if (!res.ok || data?.ok === false || data?.success === false) {
-    const msg = data?.error || `HTTP ${res.status}`;
-    const err = new Error(msg);
-    err.status = res.status;
-    err.data = data;
-    throw err;
-  }
-
-  return data;
 }
 
 function showLogin(error = "") {
@@ -71,7 +29,6 @@ function showLogin(error = "") {
       setHtml(renderLoading("جاري تسجيل الدخول..."));
       const u = await login(username, password);
 
-      // بعد تسجيل الدخول: روح لصفحة الدور
       goto(roleToHome(u.role));
       await renderForUser(u);
     } catch (e) {
@@ -80,17 +37,23 @@ function showLogin(error = "") {
   });
 }
 
+function normalizeTasks(out) {
+  const candidates = [out?.items, out?.data, out?.requests, out];
+  for (const c of candidates) {
+    if (Array.isArray(c)) return c;
+  }
+  return [];
+}
+
 /** رندر حسب الدور + حسب route */
 async function renderForUser(user) {
   const route = parseRoute(getRoute());
 
-  // لو المستخدم داخل root، وجّهه حسب دوره
   if (route.name === "root") {
     goto(roleToHome(user.role));
     return;
   }
 
-  // حماية: إذا فتح صفحة لا تخص دوره
   const expected = roleToHome(user.role).replace("#/", "");
   if (expected && route.name !== expected) {
     goto(roleToHome(user.role));
@@ -99,21 +62,27 @@ async function renderForUser(user) {
 
   const pushStatus = await getPushStatus();
 
-  // صفحات حسب الدور
   if (route.name === "agent") {
-    // أول رندر (بدون مهام) ثم نجيبها
     setHtml(renderAgent({ user, pushStatus, tasks: [], tasksError: "" }));
     bindCommonTopBar(user);
 
     const loadTasks = async () => {
       try {
-        // ✅ هنا كان سبب المشكلة غالبًا: لازم Bearer
-        const out = await fetchJsonAuth("/api/requests");
-        const items = out?.items || out?.data || out?.requests || [];
+        // ✅ موحد عبر apiGet + auth:true
+        const out = await apiGet("/api/requests", { auth: true });
+        const items = normalizeTasks(out);
+
         setHtml(renderAgent({ user, pushStatus, tasks: items, tasksError: "" }));
         bindCommonTopBar(user);
         bindAgentButtons(loadTasks);
       } catch (e) {
+        // ✅ لو الجلسة انتهت: رجّع المستخدم لتسجيل الدخول
+        if (e?.status === 401 || e?.status === 403) {
+          await logout();
+          showLogin("انتهت الجلسة. فضلاً أعد تسجيل الدخول.");
+          return;
+        }
+
         setHtml(
           renderAgent({
             user,
@@ -135,7 +104,6 @@ async function renderForUser(user) {
     };
 
     bindAgentButtons(loadTasks);
-    // جلب تلقائي أول مرة (بدون تعليق الصفحة إذا فشل)
     loadTasks().catch(() => {});
     return;
   }
@@ -152,7 +120,6 @@ async function renderForUser(user) {
     return;
   }
 
-  // fallback
   setHtml(renderHome({ user, pushStatus }));
   bindCommonTopBar(user);
 }
@@ -173,7 +140,6 @@ function bindCommonTopBar(user) {
       btnEnablePush.textContent = "جاري التفعيل...";
       await enablePush();
 
-      // إعادة رندر بعد التفعيل
       const u = await me();
       if (!u) return showLogin();
       await renderForUser(u);
@@ -190,13 +156,10 @@ async function boot() {
     setHtml(renderLoading("تحميل الإعدادات..."));
     await loadAppConfig();
   } catch (e) {
-    setHtml(
-      `<div class="alert">فشل تحميل الإعدادات: ${String(e?.message || e)}</div>`
-    );
+    setHtml(`<div class="alert">فشل تحميل الإعدادات: ${String(e?.message || e)}</div>`);
     return;
   }
 
-  // حاول تجيب المستخدم
   setHtml(renderLoading("التحقق من الجلسة..."));
   const user = await me();
 
@@ -205,24 +168,20 @@ async function boot() {
     return;
   }
 
-  // لو داخل root، وجّهه حسب الدور
   const r = getRoute();
   if (r === "#/" || r === "" || r === "#") goto(roleToHome(user.role));
 
   await renderForUser(user);
 }
 
-// عند تغير الهاش
 window.addEventListener("hashchange", async () => {
   const user = await me();
   if (!user) return showLogin();
   await renderForUser(user);
 });
 
-// زر تحديث عام (اختياري)
 $btnRefresh?.addEventListener("click", () => location.reload());
 
-// Service Worker
 if ("serviceWorker" in navigator) {
   navigator.serviceWorker.register("/service-worker.js").catch(() => {});
 }
