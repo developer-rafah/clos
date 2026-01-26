@@ -1,187 +1,265 @@
 // functions/api/requests.js
 
-import { ok, badRequest, unauthorized, serverError } from "../_lib/response.js";
-import { requireAuth } from "../_lib/auth.js";
+function json(data, status = 200, extraHeaders = {}) {
+  return new Response(JSON.stringify(data), {
+    status,
+    headers: {
+      "content-type": "application/json; charset=utf-8",
+      "cache-control": "no-store",
+      ...extraHeaders,
+    },
+  });
+}
+
+function pickJwtSecret(env) {
+  return String(env.JWT_SECRET || env.AUTH_JWT_SECRET || "").trim();
+}
 
 function pickSupabase(env) {
-  const url = String(
-    env.SUPABASE_URL ||
-    env.SUPABASE_PROJECT_URL ||
-    env.SUPABASE_REST_URL ||
-    ""
-  ).trim();
-
+  const url = String(env.SUPABASE_URL || env.SUPABASE_API_URL || "").trim();
   const key = String(
     env.SUPABASE_SERVICE_ROLE_KEY ||
-    env.SUPABASE_SERVICE_KEY ||
-    env.SUPABASE_KEY ||
-    ""
+      env.SUPABASE_SERVICE_KEY ||
+      env.SUPABASE_KEY ||
+      env.SUPABASE_ANON_KEY ||
+      ""
   ).trim();
 
+  if (!url) throw new Error("Missing SUPABASE_URL");
+  if (!key) throw new Error("Missing SUPABASE_SERVICE_ROLE_KEY (or SUPABASE_KEY)");
   return { url, key };
 }
 
-async function sb(env, path, { method = "GET", body, prefer } = {}) {
-  const { url, key } = pickSupabase(env);
-  if (!url || !key) throw new Error("Supabase env is missing (SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY)");
-
-  const headers = {
-    apikey: key,
-    authorization: `Bearer ${key}`,
-  };
-  if (prefer) headers.Prefer = prefer;
-  if (body !== undefined) headers["content-type"] = "application/json";
-
-  const res = await fetch(`${url}${path}`, {
-    method,
-    headers,
-    body: body !== undefined ? JSON.stringify(body) : undefined,
-  });
-
-  const txt = await res.text().catch(() => "");
-  let data = null;
-  try { data = txt ? JSON.parse(txt) : null; } catch { data = { raw: txt }; }
-
-  if (!res.ok) {
-    const msg =
-      data?.message ||
-      data?.error_description ||
-      data?.error ||
-      `Supabase HTTP ${res.status}`;
-    const e = new Error(msg);
-    e.status = res.status;
-    e.data = data;
-    throw e;
-  }
-
-  return data;
+function base64UrlToBytes(str) {
+  str = String(str || "").replace(/-/g, "+").replace(/_/g, "/");
+  const pad = str.length % 4;
+  if (pad) str += "=".repeat(4 - pad);
+  const bin = atob(str);
+  const out = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+  return out;
 }
 
-function isAgentRole(role) {
+function decodeJwtNoVerify(token) {
+  const [h, p] = String(token || "").split(".");
+  if (!h || !p) throw new Error("Bad token");
+  const payloadBytes = base64UrlToBytes(p);
+  const payloadJson = new TextDecoder().decode(payloadBytes);
+  return JSON.parse(payloadJson);
+}
+
+async function verifyJwtHS256(token, secret) {
+  const parts = String(token || "").split(".");
+  if (parts.length !== 3) throw new Error("Bad token");
+  const [h, p, s] = parts;
+
+  const signingInput = `${h}.${p}`;
+  const sigBytes = base64UrlToBytes(s);
+
+  const key = await crypto.subtle.importKey(
+    "raw",
+    new TextEncoder().encode(secret),
+    { name: "HMAC", hash: "SHA-256" },
+    false,
+    ["verify"]
+  );
+
+  const ok = await crypto.subtle.verify(
+    "HMAC",
+    key,
+    sigBytes,
+    new TextEncoder().encode(signingInput)
+  );
+
+  if (!ok) throw new Error("Invalid signature");
+
+  const payload = decodeJwtNoVerify(token);
+  if (payload?.exp && Date.now() / 1000 > Number(payload.exp)) {
+    throw new Error("Token expired");
+  }
+  return payload;
+}
+
+function getTokenFromRequest(req) {
+  const auth = req.headers.get("authorization") || req.headers.get("Authorization") || "";
+  const m = auth.match(/^Bearer\s+(.+)$/i);
+  if (m) return m[1].trim();
+
+  // fallback cookie
+  const cookie = req.headers.get("cookie") || "";
+  const name = "CLOS_SESSION_V1";
+  const mm = cookie.match(new RegExp(`(?:^|;\\s*)${name}=([^;]+)`));
+  if (mm) return decodeURIComponent(mm[1]);
+
+  return "";
+}
+
+function normalizeRole(role) {
   const r = String(role || "").trim();
-  return r === "مندوب" || r.toLowerCase() === "agent";
+  // دعم العربي/الإنجليزي
+  if (r === "مندوب" || r === "agent") return "agent";
+  if (r === "موظف" || r === "staff") return "staff";
+  if (r === "مدير" || r === "admin" || r === "مشرف") return "admin";
+  return r || "agent";
 }
 
-function matchesOwner(row, user) {
-  const u = String(user?.username || "").trim();
-  const n = String(user?.name || "").trim();
-
-  const au = String(row?.agent_username || "").trim();
-  const an = String(row?.agent_name || "").trim();
-
-  return (au && au === u) || (an && (an === n || an === u));
+async function sbFetch(env, path, { method = "GET", headers = {}, body } = {}) {
+  const { url, key } = pickSupabase(env);
+  const res = await fetch(`${url}/rest/v1/${path}`, {
+    method,
+    headers: {
+      apikey: key,
+      Authorization: `Bearer ${key}`,
+      "content-type": "application/json",
+      ...headers,
+    },
+    body: body ? JSON.stringify(body) : undefined,
+  });
+  return res;
 }
 
-/** GET: جلب الطلبات */
+function parseContentRangeCount(contentRange) {
+  // مثال: "0-49/120"
+  if (!contentRange) return null;
+  const m = String(contentRange).match(/\/(\d+)$/);
+  return m ? Number(m[1]) : null;
+}
+
 export async function onRequestGet({ request, env }) {
-  const auth = await requireAuth(request, env);
-  if (auth.errorResponse) return auth.errorResponse;
+  try {
+    const secret = pickJwtSecret(env);
+    if (!secret) return json({ ok: false, success: false, error: "Missing JWT secret" }, 500);
 
-  const { user } = auth;
-  const url = new URL(request.url);
+    const token = getTokenFromRequest(request);
+    if (!token) return json({ ok: false, success: false, error: "Unauthorized" }, 401);
 
-  const limit = Math.min(200, Math.max(1, Number(url.searchParams.get("limit") || 50)));
-  const offset = Math.max(0, Number(url.searchParams.get("offset") || 0));
+    const payload = await verifyJwtHS256(token, secret);
+    const role = normalizeRole(payload?.role);
 
-  // فلاتر اختيارية
-  const status = String(url.searchParams.get("status") || "").trim();
+    const u = new URL(request.url);
+    const view = String(u.searchParams.get("view") || "assigned").trim(); // assigned | closed | new | all
+    const q = String(u.searchParams.get("q") || "").trim();
+    const agent = String(u.searchParams.get("agent") || "").trim(); // للمدير/الموظف
+    const status = String(u.searchParams.get("status") || "").trim(); // حالة صريحة
+    const debug = u.searchParams.get("debug") === "1";
 
-  const params = new URLSearchParams();
-  params.set("select", "*");
-  params.set("order", "created_at.desc");
-  params.set("limit", String(limit));
-  params.set("offset", String(offset));
+    const limit = Math.max(1, Math.min(200, Number(u.searchParams.get("limit") || 50)));
+    const offset = Math.max(0, Number(u.searchParams.get("offset") || 0));
 
-  if (status) params.set("status", `eq.${status}`);
+    const clauses = [];
 
-  // لو مندوب: فلترة على agent_username أو agent_name
-  if (isAgentRole(user.role)) {
-    const u = String(user.username || "").trim();
-    const n = String(user.name || "").trim();
-    // OR filter
-    params.set("or", `(agent_username.eq.${u},agent_name.eq.${n || u})`);
-  }
+    // ✅ فلترة حسب الدور
+    if (role === "agent") {
+      const username = String(payload?.username || "").trim();
+      const name = String(payload?.name || "").trim();
 
-  const items = await sb(env, `/rest/v1/requests?${params.toString()}`, {
-    method: "GET",
-    prefer: "count=exact",
-  });
+      // نعتمد agent_name (وقد يكون مخزن كـ username عربي/إنجليزي)
+      // نضع OR بين username و name للمرونة (لو بعض البيانات قديمة)
+      clauses.push(`or(agent_name.eq.${encodeURIComponent(username)},agent_name.eq.${encodeURIComponent(name)})`);
 
-  // count لن يخرج في body هنا، لكن نعيد pagination منطقية
-  return ok({
-    items: Array.isArray(items) ? items : [],
-    pagination: { limit, offset, count: Array.isArray(items) ? items.length : 0 },
-    role: isAgentRole(user.role) ? "agent" : "staff",
-  });
-}
-
-/** POST: تحديث طلب (وزن/حالة/إغلاق) */
-export async function onRequestPost({ request, env }) {
-  const auth = await requireAuth(request, env);
-  if (auth.errorResponse) return auth.errorResponse;
-
-  const { user } = auth;
-
-  const body = await request.json().catch(() => ({}));
-  const id = String(body?.id || "").trim();
-  const patch = body?.patch && typeof body.patch === "object" ? body.patch : null;
-
-  if (!id || !patch) return badRequest("Missing id/patch");
-
-  // اقرأ الطلب أولاً للتحقق من الملكية لو مندوب
-  const q = new URLSearchParams();
-  q.set("select", "id,agent_username,agent_name,status");
-  q.set("id", `eq.${id}`);
-
-  const rows = await sb(env, `/rest/v1/requests?${q.toString()}`, { method: "GET" });
-  const row = Array.isArray(rows) ? rows[0] : null;
-  if (!row) return badRequest("Request not found");
-
-  if (isAgentRole(user.role) && !matchesOwner(row, user)) {
-    return unauthorized("Not allowed to update this request");
-  }
-
-  // allowed fields فقط
-  const upd = {};
-  if ("weight" in patch) {
-    const w = patch.weight;
-    if (w === null || w === "") {
-      upd.weight = null;
-    } else {
-      const n = Number(w);
-      if (Number.isNaN(n) || n < 0) return badRequest("Invalid weight");
-      // weight عندك int4، نخزن رقم صحيح
-      upd.weight = Math.round(n);
+      // ✅ افتراضي المندوب: المسند فقط (أي غير مكتمل وغير ملغي)
+      if (view === "closed") {
+        clauses.push(`status.eq.${encodeURIComponent("مكتمل")}`);
+      } else if (view === "all") {
+        // لا شيء
+      } else {
+        clauses.push(`status.neq.${encodeURIComponent("مكتمل")}`);
+        clauses.push(`status.neq.${encodeURIComponent("ملغي")}`);
+      }
     }
+
+    if (role === "staff") {
+      // ❗ أزلنا شرط area_code نهائياً (لأن عندك غير موجود)
+      if (view === "closed") {
+        clauses.push(`status.eq.${encodeURIComponent("مكتمل")}`);
+      } else if (view === "assigned") {
+        clauses.push(`agent_name.not.is.null`);
+        clauses.push(`status.neq.${encodeURIComponent("مكتمل")}`);
+        clauses.push(`status.neq.${encodeURIComponent("ملغي")}`);
+      } else if (view === "new") {
+        // جديد: غير مسند أو status=جديد
+        clauses.push(
+          `or(agent_name.is.null,agent_name.eq.${encodeURIComponent("")},status.eq.${encodeURIComponent("جديد")})`
+        );
+      } else if (view === "all") {
+        // لا شيء
+      }
+    }
+
+    if (role === "admin") {
+      // المدير يرى الكل + فلاتر اختيارية
+      if (view === "closed") clauses.push(`status.eq.${encodeURIComponent("مكتمل")}`);
+      if (view === "assigned") {
+        clauses.push(`agent_name.not.is.null`);
+        clauses.push(`status.neq.${encodeURIComponent("مكتمل")}`);
+        clauses.push(`status.neq.${encodeURIComponent("ملغي")}`);
+      }
+      if (view === "new") clauses.push(`or(agent_name.is.null,agent_name.eq.${encodeURIComponent("")},status.eq.${encodeURIComponent("جديد")})`);
+    }
+
+    // فلترة اختيارية بالوكيل (للموظف/المدير)
+    if (agent && role !== "agent") {
+      clauses.push(`agent_name.eq.${encodeURIComponent(agent)}`);
+    }
+
+    // فلترة اختيارية بالحالة (للموظف/المدير)
+    if (status && role !== "agent") {
+      clauses.push(`status.eq.${encodeURIComponent(status)}`);
+    }
+
+    // بحث
+    if (q) {
+      const qq = encodeURIComponent(`*${q}*`);
+      clauses.push(
+        `or(id.ilike.${qq},customer_name.ilike.${qq},phone.ilike.${qq},district.ilike.${qq},notes.ilike.${qq})`
+      );
+    }
+
+    const params = new URLSearchParams();
+    params.set("select", "*");
+    params.set("order", "created_at.desc");
+    params.set("limit", String(limit));
+    params.set("offset", String(offset));
+
+    if (clauses.length) {
+      // نجمّعها كلها داخل AND واحد
+      // داخل AND يمكن وضع or(...) و status.eq... إلخ
+      params.set("and", `(${clauses.join(",")})`);
+    }
+
+    const path = `requests?${params.toString()}`;
+
+    const res = await sbFetch(env, path, {
+      method: "GET",
+      headers: { Prefer: "count=exact" },
+    });
+
+    const text = await res.text().catch(() => "");
+    let data = [];
+    try {
+      data = text ? JSON.parse(text) : [];
+    } catch {
+      data = [];
+    }
+
+    if (!res.ok) {
+      return json(
+        { ok: false, success: false, error: `Supabase error (${res.status})`, raw: text },
+        500
+      );
+    }
+
+    const total = parseContentRangeCount(res.headers.get("content-range"));
+
+    return json({
+      ok: true,
+      success: true,
+      items: Array.isArray(data) ? data : [],
+      pagination: { limit, offset, count: total ?? (Array.isArray(data) ? data.length : 0) },
+      role,
+      ...(debug ? { debug: { path: `/rest/v1/${path}`, clauses } } : {}),
+    });
+  } catch (e) {
+    return json({ ok: false, success: false, error: e?.message || String(e) }, 500);
   }
-
-  if ("status" in patch) {
-    upd.status = String(patch.status || "").trim();
-  }
-
-  if ("notes" in patch) {
-    upd.notes = String(patch.notes || "").trim();
-  }
-
-  if ("closed_at" in patch) {
-    const v = String(patch.closed_at || "").trim();
-    upd.closed_at = v || null;
-  }
-
-  // تحديث timestamp
-  upd.updated_at = new Date().toISOString();
-
-  if (Object.keys(upd).length === 0) return badRequest("No valid fields to update");
-
-  // PATCH update
-  const uq = new URLSearchParams();
-  uq.set("id", `eq.${id}`);
-
-  const updated = await sb(env, `/rest/v1/requests?${uq.toString()}`, {
-    method: "PATCH",
-    body: upd,
-    prefer: "return=representation",
-  });
-
-  return ok({ item: Array.isArray(updated) ? updated[0] : updated });
 }
