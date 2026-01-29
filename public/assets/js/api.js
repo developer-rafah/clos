@@ -1,86 +1,45 @@
-// api.js
-const TOKEN_KEY = "CLOS_TOKEN_V1";
+// api.js - FULL
+import { getToken, clearToken } from "./auth.js";
 
-export function getToken() {
-  try {
-    return localStorage.getItem(TOKEN_KEY) || "";
-  } catch {
-    return "";
+async function parseBody(res) {
+  const ct = (res.headers.get("content-type") || "").toLowerCase();
+  if (ct.includes("application/json")) {
+    try { return await res.json(); } catch { return null; }
   }
+  try { return await res.text(); } catch { return null; }
 }
 
-export function setToken(token) {
-  try {
-    localStorage.setItem(TOKEN_KEY, token || "");
-  } catch {}
-}
-
-export function clearToken() {
-  try {
-    localStorage.removeItem(TOKEN_KEY);
-  } catch {}
-}
-
-function toQuery(params = {}) {
-  const usp = new URLSearchParams();
-  for (const [k, v] of Object.entries(params)) {
-    if (v === undefined || v === null || v === "") continue;
-    usp.set(k, String(v));
-  }
-  const s = usp.toString();
-  return s ? `?${s}` : "";
-}
-
-export async function apiFetch(path, opts = {}) {
-  const {
-    method = "GET",
-    body,
-    auth = true,
-    headers = {},
-    query,
-    signal,
-  } = opts;
-
-  const url = `${path}${query ? toQuery(query) : ""}`;
-
-  const h = new Headers(headers);
-  h.set("Accept", "application/json");
-
-  if (body !== undefined) h.set("Content-Type", "application/json");
-
+async function request(method, url, { body, auth = true, headers = {} } = {}) {
+  const h = { Accept: "application/json", ...headers };
+  if (body !== undefined) h["Content-Type"] = "application/json";
   if (auth) {
     const t = getToken();
-    if (t) h.set("Authorization", `Bearer ${t}`);
+    if (t) h["Authorization"] = `Bearer ${t}`;
   }
 
   const res = await fetch(url, {
     method,
     headers: h,
-    body: body === undefined ? undefined : JSON.stringify(body),
-    signal,
-    credentials: "same-origin",
-    cache: "no-store",
+    body: body !== undefined ? JSON.stringify(body) : undefined,
   });
 
-  const ct = res.headers.get("content-type") || "";
-  const isJson = ct.includes("application/json");
-  const payload = isJson ? await res.json().catch(() => null) : await res.text().catch(() => "");
+  const data = await parseBody(res);
 
   if (!res.ok) {
-    const msg =
-      (payload && typeof payload === "object" && (payload.error || payload.message)) ||
-      (typeof payload === "string" && payload) ||
-      `HTTP ${res.status}`;
+    const msg = (data && data.error) || (typeof data === "string" ? data : `HTTP ${res.status}`);
+    if (res.status === 401) clearToken();
     const err = new Error(msg);
     err.status = res.status;
-    err.payload = payload;
+    err.data = data;
     throw err;
   }
 
-  return payload;
+  return data;
 }
 
-export const apiGet = (path, opts) => apiFetch(path, { ...(opts || {}), method: "GET" });
-export const apiPost = (path, body, opts) => apiFetch(path, { ...(opts || {}), method: "POST", body });
-export const apiPatch = (path, body, opts) => apiFetch(path, { ...(opts || {}), method: "PATCH", body });
-export const apiDelete = (path, opts) => apiFetch(path, { ...(opts || {}), method: "DELETE" });
+export const api = {
+  get: (url, opts) => request("GET", url, opts),
+  post: (url, body, opts) => request("POST", url, { ...opts, body }),
+  patch: (url, body, opts) => request("PATCH", url, { ...opts, body }),
+  del: (url, opts) => request("DELETE", url, opts),
+};
