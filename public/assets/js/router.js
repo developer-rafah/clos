@@ -1,48 +1,24 @@
-// public/assets/js/router.js
-
-export function roleToHome(role) {
-  const r = String(role || "").trim().toLowerCase();
-
-  if (r === "مدير" || r === "admin") return "#/admin";
-  if (r === "موظف" || r === "staff") return "#/staff";
-  if (r === "مندوب" || r === "agent") return "#/agent";
-
-  return "#/staff";
-}
-
-
+// router.js
 export function getRoute() {
-  return location.hash || "#/";
+  const raw = (location.hash || "#/").slice(1); // remove '#'
+  const [pathPart, qs] = raw.split("?");
+  const path = pathPart || "/";
+  const query = Object.fromEntries(new URLSearchParams(qs || ""));
+  return { path, query };
 }
 
-export function goto(hash) {
-  const target = String(hash || "#/").trim();
-  if (location.hash === target) return;
-  location.hash = target;
-}
-
-/**
- * Parse hash routes like:
- *  "#/"            => { name: "root", path: "/" }
- *  "#/agent"       => { name: "agent", path: "/agent" }
- *  "#/agent?id=1"  => { name: "agent", path: "/agent", query: { id:"1" } }
- */
-export function parseRoute(hash = getRoute()) {
-  const h = String(hash || "#/").trim();
-  const noHash = h.startsWith("#") ? h.slice(1) : h;
-  const [pathRaw, queryRaw] = noHash.split("?");
-
-  const path = pathRaw || "/";
-  const name =
-    path === "/"
-      ? "root"
-      : path.replace(/^\//, "").split("/")[0] || "root";
-
-  const query = {};
-  if (queryRaw) {
-    const params = new URLSearchParams(queryRaw);
-    for (const [k, v] of params.entries()) query[k] = v;
+export function goto(path, query = {}) {
+  const usp = new URLSearchParams();
+  for (const [k, v] of Object.entries(query)) {
+    if (v === undefined || v === null || v === "") continue;
+    usp.set(k, String(v));
   }
+  const q = usp.toString();
+  location.hash = q ? `#${path}?${q}` : `#${path}`;
+}
 
-  return { name, path, query, hash: h };
+export function roleHome(role) {
+  if (role === "agent" || role === "مندوب") return "/agent";
+  if (role === "staff" || role === "موظف") return "/staff";
+  return "/admin";
 }
