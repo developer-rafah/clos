@@ -1,36 +1,52 @@
-// api.js - FULL
-import { getToken, clearToken } from "./auth.js";
+// api.js
+import { CONFIG } from "./app-config.js";
 
-async function parseBody(res) {
-  const ct = (res.headers.get("content-type") || "").toLowerCase();
-  if (ct.includes("application/json")) {
-    try { return await res.json(); } catch { return null; }
-  }
-  try { return await res.text(); } catch { return null; }
+function getToken() {
+  return localStorage.getItem(CONFIG.TOKEN_KEY) || "";
 }
 
-async function request(method, url, { body, auth = true, headers = {} } = {}) {
-  const h = { Accept: "application/json", ...headers };
-  if (body !== undefined) h["Content-Type"] = "application/json";
-  if (auth) {
-    const t = getToken();
-    if (t) h["Authorization"] = `Bearer ${t}`;
+async function safeReadText(res) {
+  try {
+    return await res.text();
+  } catch {
+    return "";
+  }
+}
+
+export async function request(path, options = {}) {
+  const url = path.startsWith("http") ? path : `${CONFIG.API_BASE}${path}`;
+  const token = getToken();
+
+  const headers = new Headers(options.headers || {});
+  headers.set("Accept", "application/json");
+
+  // لا نضيف Authorization إذا لم يوجد توكن (لـ login)
+  if (token && !headers.has("Authorization")) {
+    headers.set("Authorization", `Bearer ${token}`);
   }
 
-  const res = await fetch(url, {
-    method,
-    headers: h,
-    body: body !== undefined ? JSON.stringify(body) : undefined,
-  });
+  if (options.body && !(options.body instanceof FormData) && !headers.has("Content-Type")) {
+    headers.set("Content-Type", "application/json");
+  }
 
-  const data = await parseBody(res);
+  const res = await fetch(url, { ...options, headers });
 
-  if (!res.ok) {
-    const msg = (data && data.error) || (typeof data === "string" ? data : `HTTP ${res.status}`);
-    if (res.status === 401) clearToken();
+  const txt = await safeReadText(res);
+  let data = null;
+  try {
+    data = txt ? JSON.parse(txt) : null;
+  } catch {
+    data = { ok: false, success: false, error: txt || res.statusText };
+  }
+
+  if (!res.ok || (data && data.ok === false)) {
+    const msg =
+      (data && (data.error || data.message)) ||
+      `${res.status} ${res.statusText}` ||
+      "Request failed";
     const err = new Error(msg);
     err.status = res.status;
-    err.data = data;
+    err.payload = data;
     throw err;
   }
 
@@ -38,8 +54,7 @@ async function request(method, url, { body, auth = true, headers = {} } = {}) {
 }
 
 export const api = {
-  get: (url, opts) => request("GET", url, opts),
-  post: (url, body, opts) => request("POST", url, { ...opts, body }),
-  patch: (url, body, opts) => request("PATCH", url, { ...opts, body }),
-  del: (url, opts) => request("DELETE", url, opts),
+  get: (p) => request(p, { method: "GET" }),
+  post: (p, body) => request(p, { method: "POST", body: JSON.stringify(body) }),
+  patch: (p, body) => request(p, { method: "PATCH", body: JSON.stringify(body) }),
 };
