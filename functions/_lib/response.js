@@ -17,3 +17,4 @@ export function ok(payload = {}) {
 export function fail(status = 400, message = "Bad Request", extra = {}) {
   return json({ ok: false, success: false, error: message, ...extra }, status);
 }
+
