@@ -1,10 +1,9 @@
-// public/assets/js/api.js
-
+// api.js
 const TOKEN_KEY = "CLOS_TOKEN_V1";
 
 export function getToken() {
   try {
-    return String(localStorage.getItem(TOKEN_KEY) || "").trim();
+    return localStorage.getItem(TOKEN_KEY) || "";
   } catch {
     return "";
   }
@@ -12,7 +11,7 @@ export function getToken() {
 
 export function setToken(token) {
   try {
-    localStorage.setItem(TOKEN_KEY, String(token || "").trim());
+    localStorage.setItem(TOKEN_KEY, token || "");
   } catch {}
 }
 
@@ -22,46 +21,66 @@ export function clearToken() {
   } catch {}
 }
 
-export async function apiFetch(path, { method = "GET", body, headers = {} } = {}) {
-  const token = getToken();
-  const h = { ...headers };
+function toQuery(params = {}) {
+  const usp = new URLSearchParams();
+  for (const [k, v] of Object.entries(params)) {
+    if (v === undefined || v === null || v === "") continue;
+    usp.set(k, String(v));
+  }
+  const s = usp.toString();
+  return s ? `?${s}` : "";
+}
 
-  // JSON افتراضي
-  if (!h["content-type"] && !(body instanceof FormData)) {
-    h["content-type"] = "application/json";
+export async function apiFetch(path, opts = {}) {
+  const {
+    method = "GET",
+    body,
+    auth = true,
+    headers = {},
+    query,
+    signal,
+  } = opts;
+
+  const url = `${path}${query ? toQuery(query) : ""}`;
+
+  const h = new Headers(headers);
+  h.set("Accept", "application/json");
+
+  if (body !== undefined) h.set("Content-Type", "application/json");
+
+  if (auth) {
+    const t = getToken();
+    if (t) h.set("Authorization", `Bearer ${t}`);
   }
 
-  if (token) h.authorization = "Bearer " + token;
-
-  const res = await fetch(path, {
+  const res = await fetch(url, {
     method,
-    cache: "no-store",
     headers: h,
-    body: body
-      ? body instanceof FormData
-        ? body
-        : JSON.stringify(body)
-      : undefined,
+    body: body === undefined ? undefined : JSON.stringify(body),
+    signal,
+    credentials: "same-origin",
+    cache: "no-store",
   });
 
-  const txt = await res.text().catch(() => "");
-  let data = {};
-  try {
-    data = txt ? JSON.parse(txt) : {};
-  } catch {
-    data = { raw: txt };
-  }
+  const ct = res.headers.get("content-type") || "";
+  const isJson = ct.includes("application/json");
+  const payload = isJson ? await res.json().catch(() => null) : await res.text().catch(() => "");
 
-  if (!res.ok || data?.ok === false || data?.success === false) {
-    const err = new Error(data?.error || `HTTP ${res.status}`);
+  if (!res.ok) {
+    const msg =
+      (payload && typeof payload === "object" && (payload.error || payload.message)) ||
+      (typeof payload === "string" && payload) ||
+      `HTTP ${res.status}`;
+    const err = new Error(msg);
     err.status = res.status;
-    err.data = data;
+    err.payload = payload;
     throw err;
   }
 
-  return data;
+  return payload;
 }
 
-export const apiGet = (p) => apiFetch(p, { method: "GET" });
-export const apiPost = (p, b) => apiFetch(p, { method: "POST", body: b });
-export const apiPatch = (p, b) => apiFetch(p, { method: "PATCH", body: b });
+export const apiGet = (path, opts) => apiFetch(path, { ...(opts || {}), method: "GET" });
+export const apiPost = (path, body, opts) => apiFetch(path, { ...(opts || {}), method: "POST", body });
+export const apiPatch = (path, body, opts) => apiFetch(path, { ...(opts || {}), method: "PATCH", body });
+export const apiDelete = (path, opts) => apiFetch(path, { ...(opts || {}), method: "DELETE" });
