@@ -1,24 +1,23 @@
-// router.js
+// router.js - FULL
+export function goto(hash) {
+  location.hash = hash;
+}
+
 export function getRoute() {
-  const raw = (location.hash || "#/").slice(1); // remove '#'
-  const [pathPart, qs] = raw.split("?");
-  const path = pathPart || "/";
-  const query = Object.fromEntries(new URLSearchParams(qs || ""));
-  return { path, query };
+  const h = (location.hash || "#/").replace(/^#/, "");
+  if (h === "/" || h === "") return { name: "root" };
+  if (h === "/login") return { name: "login" };
+
+  if (h === "/agent") return { name: "agent" };
+  if (h === "/staff") return { name: "staff" };
+  if (h === "/admin") return { name: "admin" };
+
+  return { name: "unknown" };
 }
 
-export function goto(path, query = {}) {
-  const usp = new URLSearchParams();
-  for (const [k, v] of Object.entries(query)) {
-    if (v === undefined || v === null || v === "") continue;
-    usp.set(k, String(v));
-  }
-  const q = usp.toString();
-  location.hash = q ? `#${path}?${q}` : `#${path}`;
-}
-
-export function roleHome(role) {
-  if (role === "agent" || role === "مندوب") return "/agent";
-  if (role === "staff" || role === "موظف") return "/staff";
-  return "/admin";
+export function ensureHomeForRole(roleKey) {
+  const r = getRoute();
+  if (r.name === "login") return;
+  const expected = roleKey === "agent" ? "agent" : roleKey === "staff" ? "staff" : "admin";
+  if (r.name !== expected) goto(`#/${expected}`);
 }
