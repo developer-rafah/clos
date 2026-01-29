@@ -1,5 +1,14 @@
+
 const CONFIG_URL = "/app-config.json";
 const LS_KEY = "CLOS_APP_CONFIG_V1";
+
+// app-config.js
+export const CONFIG = {
+  API_BASE: "/api",
+  TOKEN_KEY: "CLOS_TOKEN_V1",
+  DEFAULT_LIMIT: 50,
+};
+
 
 export async function loadAppConfig({ timeoutMs = 7000 } = {}) {
   try {
