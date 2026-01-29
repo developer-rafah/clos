@@ -1,104 +1,41 @@
-import { serverError } from "./response.js";
-
-function must(env, key) {
-  const v = String(env[key] || "").trim();
-  if (!v) throw new Error(`Missing env.${key}`);
-  return v;
-}
-
-export async function sbFetch(env, path, init = {}) {
-  const SUPABASE_URL = must(env, "SUPABASE_URL");
-  const SERVICE_KEY = must(env, "SUPABASE_SERVICE_ROLE_KEY");
-
-  const url = `${SUPABASE_URL}${path}`;
-  const headers = new Headers(init.headers || {});
-  headers.set("apikey", SERVICE_KEY);
-  headers.set("authorization", `Bearer ${SERVICE_KEY}`);
-  headers.set("cache-control", "no-store");
-
-  const res = await fetch(url, { ...init, headers });
-  const text = await res.text().catch(() => "");
-  let data = null;
-  try {
-    data = text ? JSON.parse(text) : null;
-  } catch {
-    data = text;
-  }
-
-  return { res, data, text };
-}
-
-export async function getUserByUsername(env, username) {
-  const u = encodeURIComponent(String(username || "").trim());
-  const path = `/rest/v1/users?select=*&username=eq.${u}&limit=1`;
-
-  const { res, data } = await sbFetch(env, path, { method: "GET" });
-  if (!res.ok) throw new Error(typeof data === "string" ? data : JSON.stringify(data));
-  return Array.isArray(data) ? data[0] : null;
-}
-
-export function envProblem(e) {
-  return serverError(e?.message || String(e));
-}
-
-// ✅ هذه الدوال مطلوبة لأن api/push/register.js و api/push/send.js يستوردونها
-
-export async function upsertPushToken(env, tokenRow) {
-  // tokenRow مثال متوقع:
-  // { username, endpoint, p256dh, auth, platform, area_code, updated_at }
-  // نخزّنها بجدول push_tokens (لازم يكون موجود)
-  const row = tokenRow || {};
-  const endpoint = String(row.endpoint || "").trim();
-  if (!endpoint) throw new Error("upsertPushToken: missing endpoint");
-
-  const payload = {
-    endpoint,
-    username: row.username ?? null,
-    p256dh: row.p256dh ?? null,
-    auth: row.auth ?? null,
-    platform: row.platform ?? null,
-    area_code: row.area_code ?? null,
-    updated_at: new Date().toISOString(),
+// functions/_lib/supabase.js
+function sbHeaders(env) {
+  const key = env.SUPABASE_SERVICE_ROLE_KEY || env.SUPABASE_ANON_KEY || env.SUPABASE_KEY;
+  if (!env.SUPABASE_URL || !key) throw new Error("Supabase env missing");
+  return {
+    apikey: key,
+    Authorization: `Bearer ${key}`,
+    "Content-Type": "application/json",
   };
-
-  // نستخدم upsert عن طريق POST + Prefer: resolution=merge-duplicates
-  const { res, data } = await sbFetch(env, `/rest/v1/push_tokens`, {
-    method: "POST",
-    headers: {
-      Prefer: "resolution=merge-duplicates,return=representation",
-    },
-    body: payload,
-  });
-
-  if (!res.ok) {
-    throw new Error("upsertPushToken supabase error: " + (typeof data === "string" ? data : JSON.stringify(data)));
-  }
-
-  return Array.isArray(data) ? data[0] : data;
 }
 
-export async function listPushTokens(env, filters = {}) {
-  // filters مثال:
-  // { area_code, username, role }
-  const qs = new URLSearchParams();
-  qs.set("select", "endpoint,username,p256dh,auth,platform,area_code,updated_at");
+export async function sbSelect(env, table, query, { count = false } = {}) {
+  const base = env.SUPABASE_URL.replace(/\/+$/, "");
+  const url = `${base}/rest/v1/${table}?${query}`;
+  const headers = { ...sbHeaders(env) };
+  if (count) headers.Prefer = "count=exact";
 
-  const area = String(filters.area_code || "").trim();
-  const user = String(filters.username || "").trim();
+  const res = await fetch(url, { headers });
+  const txt = await res.text();
+  if (!res.ok) throw new Error(txt || res.statusText);
 
-  if (area) qs.set("area_code", `eq.${area}`);
-  if (user) qs.set("username", `eq.${user}`);
-
-  // أحدث أولًا
-  qs.set("order", "updated_at.desc");
-
-  const { res, data } = await sbFetch(env, `/rest/v1/push_tokens?${qs.toString()}`, {
-    method: "GET",
-  });
-
-  if (!res.ok) {
-    throw new Error("listPushTokens supabase error: " + (typeof data === "string" ? data : JSON.stringify(data)));
+  const data = txt ? JSON.parse(txt) : [];
+  let total = null;
+  const range = res.headers.get("content-range");
+  if (range && range.includes("/")) {
+    total = Number(range.split("/").pop());
+    if (Number.isNaN(total)) total = null;
   }
+  return { data, total };
+}
 
-  return Array.isArray(data) ? data : [];
+export async function sbPatch(env, table, idField, idValue, patch) {
+  const base = env.SUPABASE_URL.replace(/\/+$/, "");
+  const url = `${base}/rest/v1/${table}?${encodeURIComponent(idField)}=eq.${encodeURIComponent(idValue)}`;
+  const headers = { ...sbHeaders(env), Prefer: "return=representation" };
+
+  const res = await fetch(url, { method: "PATCH", headers, body: JSON.stringify(patch) });
+  const txt = await res.text();
+  if (!res.ok) throw new Error(txt || res.statusText);
+  return txt ? JSON.parse(txt) : [];
 }
