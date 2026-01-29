@@ -1,315 +1,413 @@
-// app.js
-import * as UI from "./ui.js";
+// app.js (APP MODULE) - FULL
+import { api } from "./api.js";
 import * as Auth from "./auth.js";
-import { apiGet, apiPatch, apiPost } from "./api.js";
-import { getRoute, goto, roleHome } from "./router.js";
+import * as UI from "./ui.js";
+import { getRoute, goto, ensureHomeForRole } from "./router.js";
 
-const root = document.getElementById("app") || document.body;
+const ROOT_ID = "app";
 
 const state = {
   user: null,
-  view: "",
+  roleKey: null, // admin | staff | agent
+  view: null, // agent: assigned|closed, staff/admin: new|assigned|closed|all
   q: "",
-  offset: 0,
   limit: 20,
+  offset: 0,
   items: [],
-  pagination: null,
-  agents: [],
-  stats: {},
-  loading: false,
-  role: "",
+  pagination: { limit: 20, offset: 0, count: 0, total: 0 },
+  kpis: { total: 0, new: 0, assigned: 0, closed: 0, cancelled: 0 },
+  agents: [], // for staff/admin assignment dropdown
+  isLoading: false,
+  lastError: null,
 };
 
-function setHTML(html) {
-  root.innerHTML = html;
+function $(sel, root = document) {
+  return root.querySelector(sel);
 }
 
-function roleKey(role) {
-  if (role === "مندوب") return "agent";
-  if (role === "موظف") return "staff";
-  if (role === "مدير") return "admin";
-  return role || "admin";
+function getRootEl() {
+  return document.getElementById(ROOT_ID) || document.body;
 }
 
-function parseDefaultView(role) {
-  if (role === "agent") return "assigned";
-  if (role === "staff") return "new";
-  return "all";
+function setHtml(html) {
+  getRootEl().innerHTML = html;
 }
 
-function safeMsg(err) {
-  return err?.message || "حدث خطأ غير متوقع";
+function setLoading(on, text = "جاري التحميل ...") {
+  state.isLoading = on;
+  const overlay = $("#loadingOverlay");
+  if (!overlay) return;
+  overlay.style.display = on ? "flex" : "none";
+  const t = $("#loadingText", overlay);
+  if (t) t.textContent = text;
 }
 
-async function loadAgentsIfNeeded(role) {
-  if (role === "agent") return [];
-  // جلب المندوبين للاسناد
-  const out = await apiGet("/api/users", { query: { role: "agent" } }).catch(() => ({ items: [] }));
-  return out?.items || out?.users || [];
+function toast(msg, type = "error") {
+  UI.toast(msg, type);
 }
 
-async function loadStatsIfSupported(role) {
-  // لو عندك endpoint stats لاحقًا؛ الآن نعملها من counts عبر requests?view=...&limit=0
-  // لتخفيف الضغط: نجيب count فقط من pagination.count
-  async function count(view) {
-    const out = await apiGet("/api/requests", { query: { view, limit: 1, offset: 0 } });
-    return out?.pagination?.count ?? (out?.items?.length ?? 0);
-  }
-
-  if (role === "agent") return {};
-  const [n, a, c, t] = await Promise.all([
-    count("new").catch(() => 0),
-    count("assigned").catch(() => 0),
-    count("closed").catch(() => 0),
-    count("all").catch(() => 0),
-  ]);
-  return { new: n, assigned: a, closed: c, total: t };
+function safeRoleKey(user) {
+  // server returns roleKey, but be defensive
+  return user?.roleKey || user?.role || "agent";
 }
 
-async function loadRequests({ role, view, q, offset, limit }) {
-  const out = await apiGet("/api/requests", {
-    query: { view, q, offset, limit },
-  });
-  return out;
-}
-
-function renderPage({ error } = {}) {
-  const role = state.role;
-  const payload = {
-    user: state.user,
-    items: state.items,
-    view: state.view,
-    q: state.q,
-    pagination: state.pagination,
-    agents: state.agents,
-    stats: state.stats,
-    error: error || "",
-  };
-
-  if (role === "agent") return UI.renderAgent(payload);
-  if (role === "staff") return UI.renderStaff(payload);
-  return UI.renderAdmin(payload);
-}
-
-async function ensureAuth() {
-  if (state.user) return state.user;
+async function withBusy(fn, loadingText) {
   try {
-    const u = await Auth.me();
-    if (!u) throw new Error("Unauthorized");
-    state.user = u;
-    state.role = roleKey(u.role);
-    return u;
-  } catch {
-    state.user = null;
-    state.role = "";
-    return null;
+    setLoading(true, loadingText || "جاري التحميل ...");
+    await fn();
+  } catch (e) {
+    console.error(e);
+    state.lastError = e;
+    toast(e?.message || "حدث خطأ غير متوقع");
+    // لا تترك الصفحة عالقة: اعرض واجهة مع زر إعادة المحاولة
+    renderCurrent({ fallbackError: e });
+  } finally {
+    setLoading(false);
   }
 }
 
-function showLogin(error) {
-  setHTML(UI.renderLogin({ error }));
-  UI.bindLogin(root, async (username, password) => {
-    setHTML(UI.renderLoading("... جاري تسجيل الدخول"));
-    const u = await Auth.login(username, password);
-    if (!u) throw new Error("بيانات الدخول غير صحيحة");
-    state.user = u;
-    state.role = roleKey(u.role);
-    goto(roleHome(state.role), {});
-    await route();
-  });
+async function loadSession() {
+  const token = Auth.getToken();
+  if (!token) {
+    state.user = null;
+    state.roleKey = null;
+    return;
+  }
+  const out = await Auth.me(); // throws on 401
+  state.user = out.user;
+  state.roleKey = safeRoleKey(out.user);
+}
+
+function resetList() {
+  state.offset = 0;
+  state.items = [];
+  state.pagination = { limit: state.limit, offset: 0, count: 0, total: 0 };
+}
+
+function defaultViewForRole(roleKey) {
+  if (roleKey === "agent") return "assigned";
+  if (roleKey === "staff") return "new";
+  return "all"; // admin
+}
+
+async function loadAgentsIfNeeded() {
+  if (state.roleKey !== "staff" && state.roleKey !== "admin") return;
+  if (state.agents.length) return;
+  const out = await api.get("/api/users?role=agent");
+  state.agents = Array.isArray(out.items) ? out.items : [];
+}
+
+async function fetchRequests({ append = false } = {}) {
+  const params = new URLSearchParams();
+  params.set("view", state.view || defaultViewForRole(state.roleKey));
+  params.set("limit", String(state.limit));
+  params.set("offset", String(state.offset));
+  if (state.q && state.q.trim()) params.set("q", state.q.trim());
+
+  const out = await api.get(`/api/requests?${params.toString()}`);
+
+  state.kpis = out.kpis || state.kpis;
+  state.pagination = out.pagination || state.pagination;
+
+  if (append) state.items = state.items.concat(out.items || []);
+  else state.items = out.items || [];
+
+  // مهم: خزّن roleKey لو رجع من السيرفر
+  if (out.roleKey) state.roleKey = out.roleKey;
+}
+
+function renderCurrent({ fallbackError } = {}) {
+  const route = getRoute();
+  const user = state.user;
+  const roleKey = state.roleKey;
+
+  // لم يسجل دخول
+  if (!user || route.name === "login") {
+    setHtml(UI.renderLogin({ error: fallbackError?.message || null }));
+    return;
+  }
+
+  // تأكد المسار مناسب للدور
+  ensureHomeForRole(roleKey);
+
+  // بناء الشاشة حسب الدور
+  if (roleKey === "agent") {
+    setHtml(
+      UI.renderAgent({
+        user,
+        view: state.view,
+        q: state.q,
+        items: state.items,
+        pagination: state.pagination,
+        kpis: state.kpis,
+      })
+    );
+    return;
+  }
+
+  if (roleKey === "staff") {
+    setHtml(
+      UI.renderStaff({
+        user,
+        view: state.view,
+        q: state.q,
+        items: state.items,
+        pagination: state.pagination,
+        kpis: state.kpis,
+        agents: state.agents,
+        error: fallbackError?.message || null,
+      })
+    );
+    return;
+  }
+
+  // admin
+  setHtml(
+    UI.renderAdmin({
+      user,
+      view: state.view,
+      q: state.q,
+      items: state.items,
+      pagination: state.pagination,
+      kpis: state.kpis,
+      agents: state.agents,
+      error: fallbackError?.message || null,
+    })
+  );
 }
 
 async function route() {
-  if (state.loading) return;
-  state.loading = true;
+  const route = getRoute();
 
-  try {
-    const u = await ensureAuth();
-    if (!u) {
-      showLogin();
+  await withBusy(async () => {
+    await loadSession();
+
+    // لا يوجد جلسة => login
+    if (!state.user) {
+      if (route.name !== "login") goto("#/login");
+      renderCurrent();
       return;
     }
 
-    const { path, query } = getRoute();
-    const role = state.role;
-
-    // حماية المسارات
-    const wanted =
-      path === "/agent" || path === "/staff" || path === "/admin"
-        ? path
-        : roleHome(role);
-
-    if (path !== wanted) {
-      goto(wanted, query);
-      state.loading = false;
+    // يوجد جلسة
+    const roleKey = state.roleKey;
+    if (route.name === "root") {
+      goto(`#/${roleKey}`);
       return;
     }
 
-    // view/q/pagination
-    state.view = query.view || parseDefaultView(role);
-    state.q = query.q || "";
-    state.offset = Number(query.offset || 0) || 0;
-    state.limit = Number(query.limit || state.limit) || state.limit;
+    // default view
+    if (!state.view) state.view = defaultViewForRole(roleKey);
 
-    setHTML(UI.renderLoading("... جاري التحميل"));
+    // تحميل agents لو لزم
+    await loadAgentsIfNeeded();
 
-    // تحميل بيانات مساعدة
-    state.agents = await loadAgentsIfNeeded(role).catch(() => []);
-    state.stats = await loadStatsIfSupported(role).catch(() => ({}));
+    // تحميل الطلبات
+    resetList();
+    await fetchRequests({ append: false });
 
-    const out = await loadRequests({
-      role,
-      view: state.view,
-      q: state.q,
-      offset: state.offset,
-      limit: state.limit,
+    renderCurrent();
+  }, "تحميل البيانات ...");
+}
+
+async function doLogin(username, password) {
+  await withBusy(async () => {
+    const out = await Auth.login(username, password);
+    state.user = out.user;
+    state.roleKey = safeRoleKey(out.user);
+    state.view = defaultViewForRole(state.roleKey);
+    state.q = "";
+    state.agents = [];
+    resetList();
+
+    // توجه للصفحة المناسبة
+    goto(`#/${state.roleKey}`);
+    await loadAgentsIfNeeded();
+    await fetchRequests();
+    renderCurrent();
+  }, "جاري تسجيل الدخول ...");
+}
+
+async function doLogout() {
+  await withBusy(async () => {
+    Auth.logout();
+    state.user = null;
+    state.roleKey = null;
+    state.view = null;
+    state.q = "";
+    state.items = [];
+    state.agents = [];
+    goto("#/login");
+    renderCurrent();
+  }, "تسجيل الخروج ...");
+}
+
+async function assignRequest(id, agentName) {
+  // staff/admin فقط
+  await withBusy(async () => {
+    await api.patch(`/api/requests/${encodeURIComponent(id)}`, {
+      agent_name: agentName,
+      status: "مسند",
+      assigned_at: new Date().toISOString(),
     });
 
-    state.items = out?.items || [];
-    state.pagination = out?.pagination || {
-      limit: state.limit,
-      offset: state.offset,
-      count: state.items.length,
-    };
-
-    setHTML(renderPage());
-  } catch (err) {
-    // أهم شيء: لا تترك الشاشة على "جاري التحميل"
-    setHTML(renderPage({ error: safeMsg(err) }));
-  } finally {
-    state.loading = false;
-  }
+    // بعد الإسناد: أعد التحميل
+    resetList();
+    await fetchRequests();
+    renderCurrent();
+    toast("تم إسناد الطلب ✅", "success");
+  }, "جاري إسناد الطلب ...");
 }
 
-// ============ Actions (Event Delegation) ============
-function getSearchValue() {
-  return root.querySelector('input[data-role="search"]')?.value?.trim() || "";
+async function closeRequest(id) {
+  await withBusy(async () => {
+    await api.patch(`/api/requests/${encodeURIComponent(id)}`, {
+      status: "مكتمل",
+      closed_at: new Date().toISOString(),
+    });
+    resetList();
+    await fetchRequests();
+    renderCurrent();
+    toast("تم إغلاق الطلب ✅", "success");
+  }, "جاري إغلاق الطلب ...");
 }
 
-async function doRefresh({ keepOffset = false } = {}) {
-  const { path } = getRoute();
-  const q = getSearchValue();
-  goto(path, {
-    view: state.view,
-    q,
-    offset: keepOffset ? state.offset : 0,
-    limit: state.limit,
-  });
-  await route();
+async function saveWeight(id, weight) {
+  await withBusy(async () => {
+    const w = Number(weight);
+    if (!Number.isFinite(w) || w <= 0) throw new Error("الوزن غير صحيح");
+    await api.patch(`/api/requests/${encodeURIComponent(id)}`, {
+      weight: w,
+      updated_at: new Date().toISOString(),
+    });
+    // تحديث سريع بدون إعادة تحميل كامل
+    const item = state.items.find((x) => x.id === id);
+    if (item) item.weight = w;
+    renderCurrent();
+    toast("تم حفظ الوزن ✅", "success");
+  }, "جاري حفظ الوزن ...");
 }
 
-async function doLoadMore() {
-  const { path } = getRoute();
-  const nextOffset = (state.pagination?.offset ?? state.offset) + (state.pagination?.limit ?? state.limit);
-  goto(path, {
-    view: state.view,
-    q: state.q,
-    offset: nextOffset,
-    limit: state.limit,
-  });
-  await route();
-}
-
-async function doSetView(view) {
-  const { path } = getRoute();
-  goto(path, { view, q: state.q, offset: 0, limit: state.limit });
-  await route();
-}
-
-async function doAssign(id) {
-  const sel = root.querySelector(`select[data-id="${CSS.escape(id)}"][data-role="agentSelect"]`);
-  const agent_username = sel?.value || "";
-  if (!agent_username) throw new Error("اختر مندوب أولاً");
-
-  // ✅ نعتمد agent_name كـ “المعرف” (username) لضمان الثبات
-  await apiPatch(`/api/requests/${encodeURIComponent(id)}`, { agent_name: agent_username });
-}
-
-async function doSaveWeight(id) {
-  const inp = root.querySelector(`input[data-id="${CSS.escape(id)}"][data-role="weightInput"]`);
-  const weight = inp?.value ?? "";
-  if (weight === "") throw new Error("أدخل الوزن أولاً");
-  await apiPatch(`/api/requests/${encodeURIComponent(id)}`, { weight });
-}
-
-async function doClose(id) {
-  await apiPatch(`/api/requests/${encodeURIComponent(id)}`, { close: true });
-}
-
-document.addEventListener("click", async (e) => {
+function onClick(e) {
   const btn = e.target.closest("[data-action]");
   if (!btn) return;
   const action = btn.dataset.action;
-  const id = btn.dataset.id;
 
-  try {
-    if (action === "logout") {
-      Auth.logout();
-      state.user = null;
-      state.role = "";
-      showLogin("تم تسجيل الخروج");
-      return;
-    }
-
-    if (action === "refresh") {
-      await doRefresh();
-      return;
-    }
-
-    if (action === "loadMore") {
-      await doLoadMore();
-      return;
-    }
-
-    if (action === "setView") {
-      await doSetView(btn.dataset.view || "");
-      return;
-    }
-
-    if (action === "reqAssign") {
-      setHTML(UI.renderLoading("... جاري الإسناد"));
-      await doAssign(id);
-      await doRefresh({ keepOffset: false });
-      return;
-    }
-
-    if (action === "reqWeight") {
-      setHTML(UI.renderLoading("... جاري حفظ الوزن"));
-      await doSaveWeight(id);
-      await doRefresh({ keepOffset: true });
-      return;
-    }
-
-    if (action === "reqClose") {
-      setHTML(UI.renderLoading("... جاري إغلاق الطلب"));
-      await doClose(id);
-      await doRefresh({ keepOffset: false });
-      return;
-    }
-
-    if (action === "enablePush") {
-      // عندك push.js ممكن تربطه هنا لاحقاً
-      alert("ميزة الإشعارات تعتمد على Service Worker (يمكن تفعيلها لاحقاً).");
-      return;
-    }
-  } catch (err) {
-    // لا تترك المستخدم على Loading
-    setHTML(renderPage({ error: safeMsg(err) }));
+  // عام
+  if (action === "logout") return void doLogout();
+  if (action === "retry") return void route();
+  if (action === "refresh") {
+    return void withBusy(async () => {
+      resetList();
+      await fetchRequests();
+      renderCurrent();
+    }, "تحديث ...");
   }
-});
 
-document.addEventListener("keydown", async (e) => {
-  // Enter في البحث
-  if (e.key === "Enter" && e.target && e.target.matches('input[data-role="search"]')) {
+  // Tabs / View
+  if (action === "setView") {
+    const v = btn.dataset.view;
+    if (!v) return;
+    state.view = v;
+    return void withBusy(async () => {
+      resetList();
+      await fetchRequests();
+      renderCurrent();
+    }, "جاري تحميل الطلبات ...");
+  }
+
+  // Search
+  if (action === "search") {
+    const input = $("#searchInput");
+    state.q = input ? input.value : "";
+    return void withBusy(async () => {
+      resetList();
+      await fetchRequests();
+      renderCurrent();
+    }, "بحث ...");
+  }
+
+  // Load More
+  if (action === "loadMore") {
+    state.offset += state.limit;
+    return void withBusy(async () => {
+      await fetchRequests({ append: true });
+      renderCurrent();
+    }, "تحميل المزيد ...");
+  }
+
+  // Agent actions
+  if (action === "closeRequest") {
+    const id = btn.dataset.id;
+    if (!id) return;
+    return void closeRequest(id);
+  }
+
+  if (action === "saveWeight") {
+    const id = btn.dataset.id;
+    if (!id) return;
+    const input = $(`#weight-${CSS.escape(id)}`);
+    const weight = input ? input.value : "";
+    return void saveWeight(id, weight);
+  }
+
+  // Staff/Admin assign
+  if (action === "assign") {
+    const id = btn.dataset.id;
+    if (!id) return;
+    const sel = $(`#agent-${CSS.escape(id)}`);
+    const agentName = sel ? sel.value : "";
+    if (!agentName) return void toast("اختر مندوب أولاً");
+    return void assignRequest(id, agentName);
+  }
+}
+
+function onSubmit(e) {
+  const form = e.target.closest("form");
+  if (!form) return;
+
+  if (form.id === "loginForm") {
     e.preventDefault();
-    await doRefresh();
+    const username = (form.querySelector('input[name="username"]')?.value || "").trim();
+    const password = (form.querySelector('input[name="password"]')?.value || "").trim();
+    if (!username || !password) return void toast("أدخل اسم المستخدم وكلمة المرور");
+    return void doLogin(username, password);
   }
-});
+}
 
-window.addEventListener("hashchange", route);
+function bindGlobal() {
+  const root = getRootEl();
+
+  // Event delegation (حتى لو تغيرت الصفحة بالكامل)
+  root.addEventListener("click", onClick);
+  root.addEventListener("submit", onSubmit);
+
+  // overlay ثابت حتى لا يضيع عند render
+  if (!$("#loadingOverlay")) {
+    const overlay = document.createElement("div");
+    overlay.id = "loadingOverlay";
+    overlay.style.cssText = `
+      position:fixed; inset:0; display:none; align-items:center; justify-content:center;
+      background:rgba(0,0,0,.35); z-index:9999; backdrop-filter: blur(6px);
+    `;
+    overlay.innerHTML = `
+      <div style="display:flex;flex-direction:column;align-items:center;gap:12px;color:#fff">
+        <div style="width:44px;height:44px;border-radius:50%;border:4px solid rgba(255,255,255,.25);border-top-color:#7b61ff;animation:spin 1s linear infinite"></div>
+        <div id="loadingText" style="font-size:18px">جاري التحميل ...</div>
+      </div>
+      <style>@keyframes spin{to{transform:rotate(360deg)}}</style>
+    `;
+    document.body.appendChild(overlay);
+  }
+
+  // toast container
+  UI.ensureToastRoot();
+}
 
 (async function boot() {
-  // افتراضي
-  if (!location.hash) location.hash = "#/";
+  bindGlobal();
+  // route on load + hash changes
+  window.addEventListener("hashchange", () => route());
+  if (!location.hash) goto("#/");
   await route();
 })();
