@@ -1,30 +1,26 @@
-// auth.js - FULL
+// auth.js
 import { api } from "./api.js";
+import { CONFIG } from "./app-config.js";
 
-const KEY = "CLOS_TOKEN_V1";
+export function setToken(token) {
+  if (token) localStorage.setItem(CONFIG.TOKEN_KEY, token);
+  else localStorage.removeItem(CONFIG.TOKEN_KEY);
+}
 
 export function getToken() {
-  return localStorage.getItem(KEY) || "";
-}
-
-export function setToken(t) {
-  localStorage.setItem(KEY, t);
-}
-
-export function clearToken() {
-  localStorage.removeItem(KEY);
+  return localStorage.getItem(CONFIG.TOKEN_KEY) || "";
 }
 
 export async function login(username, password) {
-  const out = await api.post("/api/auth/login", { username, password }, { auth: false });
+  const out = await api.post("/auth/login", { username, password });
   if (out?.token) setToken(out.token);
-  return out;
+  return out; // { ok, user, token, role }
 }
 
 export async function me() {
-  return await api.get("/api/auth/me");
+  return await api.get("/auth/me"); // { ok, user, role }
 }
 
 export function logout() {
-  clearToken();
+  setToken("");
 }
