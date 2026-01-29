@@ -1,73 +1,41 @@
-import { ok, badRequest, unauthorized, serverError } from "../../_lib/response.js";
-import { signJwt } from "../../_lib/jwt.js";
-import { buildSetCookie, constantTimeEqual, sha256Hex } from "../../_lib/security.js";
-import { COOKIE_NAME } from "../../_lib/auth.js";
-import { getUserByUsername, envProblem } from "../../_lib/supabase.js";
+// functions/api/auth/login.js - FULL
+import { json, sbFetch, sbHeaders, jwtSign, normalizeRole } from "../_shared.js";
 
-function pickJwtSecret(env) {
-  return String(env.JWT_SECRET || env.AUTH_JWT_SECRET || "").trim();
-}
-
-export async function onRequestPost({ request, env }) {
-  const secret = pickJwtSecret(env);
-  if (!secret) return serverError("Missing JWT_SECRET in environment");
-
-  const body = await request.json().catch(() => ({}));
-  const username = String(body.username || "").trim();
-  const password = String(body.password || "").trim();
-  if (!username || !password) return badRequest("Missing username/password");
-
-  let user;
+export async function onRequestPost(ctx) {
   try {
-    user = await getUserByUsername(env, username);
-  } catch (e) {
-    return envProblem(e);
-  }
+    const { request, env } = ctx;
+    const body = await request.json().catch(() => ({}));
+    const username = String(body.username || "").trim();
+    const password = String(body.password || "").trim();
+    if (!username || !password) return json({ ok: false, success: false, error: "Missing credentials" }, 400);
 
-  if (!user) return unauthorized("Invalid credentials");
+    // users table: username, password, role, (optional) name, area_code
+    const q = `/rest/v1/users?select=username,password,role,name,area_code&username=eq.${encodeURIComponent(username)}&limit=1`;
+    const res = await sbFetch(env, q, { headers: sbHeaders(env), method: "GET" });
+    const rows = await res.json();
+    const user = rows?.[0];
+    if (!user) return json({ ok: false, success: false, error: "Unauthorized" }, 401);
+    if (String(user.password) !== password) return json({ ok: false, success: false, error: "Unauthorized" }, 401);
 
-  // ندعم أكثر من اسم حقل حسب قاعدة بياناتك
-  const stored = String(user.password_hash || user.password || "").trim();
-  if (!stored) return unauthorized("Invalid credentials");
+    const { roleKey, roleLabel } = normalizeRole(user.role);
+    const payload = {
+      sub: user.username,
+      username: user.username,
+      name: user.name || user.username,
+      role: roleKey,
+      roleLabel,
+      area_code: user.area_code ?? null,
+    };
 
-  let passOk = false;
+    const token = await jwtSign(payload, env.JWT_SECRET, 60 * 60 * 24 * 30);
 
-  // لو مخزن SHA256 (64 hex)
-  if (/^[a-f0-9]{64}$/i.test(stored)) {
-    const hashed = await sha256Hex(password);
-    passOk = constantTimeEqual(hashed.toLowerCase(), stored.toLowerCase());
-  } else {
-    // plaintext (غير مفضل لكنه شائع في مشاريع بسيطة)
-    passOk = constantTimeEqual(password, stored);
-  }
-
-  if (!passOk) return unauthorized("Invalid credentials");
-
-  const payload = {
-    username: user.username || username,
-    name: user.name || user.full_name || "",
-    role: user.role || "agent",
-    area_code: user.area_code || null,
-  };
-
-  const token = await signJwt(payload, secret, { expiresInSec: 60 * 60 * 24 * 7 }); // 7 أيام
-
-  const setCookie = buildSetCookie(COOKIE_NAME, token, {
-    httpOnly: true,
-    secure: true,
-    sameSite: "Lax",
-    path: "/",
-    maxAge: 60 * 60 * 24 * 7,
-  });
-
-  return ok(
-    {
-      user: { username: payload.username, name: payload.name, role: payload.role },
+    return json({
+      ok: true,
+      success: true,
+      user: { username: payload.username, name: payload.name, role: roleLabel, roleKey, area_code: payload.area_code },
       token,
-    },
-    200,
-    { "set-cookie": setCookie }
-  );
+    });
+  } catch (e) {
+    return json({ ok: false, success: false, error: e?.message || "Server error" }, 500);
+  }
 }
-
-
