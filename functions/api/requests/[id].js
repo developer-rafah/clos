@@ -1,51 +1,45 @@
-// functions/api/requests/[id].js - FULL
-import { json, sbFetch, sbHeaders, requireUser } from "../_shared.js";
+// functions/api/requests/[id].js
+import { ok, fail } from "../../_lib/response.js";
+import { requireAuth } from "../../_lib/auth.js";
+import { sbSelect, sbPatch } from "../../_lib/supabase.js";
 
 function enc(v) {
   return encodeURIComponent(String(v));
 }
 
-export async function onRequestPatch(ctx) {
+export async function onRequestPatch({ request, env, params }) {
   try {
-    const { request, env, params } = ctx;
-    const me = await requireUser(request, env);
+    const user = await requireAuth(request, env);
     const id = params.id;
-    if (!id) return json({ ok: false, success: false, error: "Missing id" }, 400);
 
-    const body = await request.json().catch(() => ({}));
-    const patch = {};
+    const patch = await request.json();
 
-    // staff/admin يستطيعون الإسناد + تغيير status
-    if (me.roleKey === "admin" || me.roleKey === "staff") {
-      if (body.agent_name !== undefined) patch.agent_name = String(body.agent_name || "").trim() || null;
-      if (body.status !== undefined) patch.status = String(body.status || "").trim() || null;
-      if (body.assigned_at !== undefined) patch.assigned_at = body.assigned_at || null;
+    // اقرأ الطلب الحالي للتأكد من الصلاحيات
+    const { data } = await sbSelect(env, "requests", `select=id,agent_name,status& id=eq.${enc(id)}`);
+    const row = data?.[0];
+    if (!row) return fail(404, "Not found");
+
+    // مندوب: يسمح فقط على طلباته
+    if (user.role === "agent") {
+      const ag = row.agent_name || "";
+      const okOwner = ag === user.username || ag === (user.name || "");
+      if (!okOwner) return fail(403, "Forbidden");
     }
 
-    // agent يستطيع حفظ الوزن + إغلاق طلبه فقط
-    if (me.roleKey === "agent") {
-      if (body.weight !== undefined) patch.weight = body.weight;
-      if (body.status !== undefined) patch.status = String(body.status || "").trim() || null;
-      if (body.closed_at !== undefined) patch.closed_at = body.closed_at || null;
+    // نظف patch
+    const allowed = {};
+    if (patch.weight != null) allowed.weight = Number(patch.weight || 0);
+    if (patch.status != null) allowed.status = String(patch.status);
+    if (patch.agent_name != null && (user.role === "staff" || user.role === "admin")) {
+      allowed.agent_name = String(patch.agent_name || "");
+      allowed.assigned_at = new Date().toISOString();
+      if (!allowed.status) allowed.status = "مسند";
     }
+    if (patch.closed_at != null) allowed.closed_at = String(patch.closed_at);
 
-    if (body.updated_at !== undefined) patch.updated_at = body.updated_at || null;
-
-    // لا تحديثات؟
-    if (!Object.keys(patch).length) return json({ ok: false, success: false, error: "No updates" }, 400);
-
-    const url = `/rest/v1/requests?id=eq.${enc(id)}`;
-    const res = await sbFetch(env, url, {
-      method: "PATCH",
-      headers: sbHeaders(env, { Prefer: "return=representation" }),
-      body: JSON.stringify(patch),
-    });
-
-    const out = await res.json();
-    return json({ ok: true, success: true, item: out?.[0] || null });
+    const out = await sbPatch(env, "requests", "id", id, allowed);
+    return ok({ item: out?.[0] || null });
   } catch (e) {
-    const msg = e?.message || "Server error";
-    const code = msg === "Unauthorized" ? 401 : 500;
-    return json({ ok: false, success: false, error: msg }, code);
+    return fail(e.message === "Unauthorized" ? 401 : 500, e.message || "Error");
   }
 }
