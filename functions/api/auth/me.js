@@ -1,22 +1,15 @@
-// functions/api/auth/me.js - FULL
-import { json, requireUser } from "../_shared.js";
+// functions/api/auth/me.js
+import { ok, fail } from "../../_lib/response.js";
+import { requireAuth } from "../../_lib/auth.js";
 
-export async function onRequestGet(ctx) {
+export async function onRequestGet({ request, env }) {
   try {
-    const { request, env } = ctx;
-    const u = await requireUser(request, env);
-    return json({
-      ok: true,
-      success: true,
-      user: {
-        username: u.username,
-        name: u.name,
-        role: u.roleLabel,
-        roleKey: u.roleKey,
-        area_code: u.area_code,
-      },
+    const u = await requireAuth(request, env);
+    return ok({
+      user: { username: u.username, role: u.role, name: u.name || u.username, area_code: u.area_code ?? null },
+      role: u.role,
     });
   } catch (e) {
-    return json({ ok: false, success: false, error: "Unauthorized" }, 401);
+    return fail(401, "Unauthorized");
   }
 }
