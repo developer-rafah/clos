@@ -1,78 +1,57 @@
+// functions/_lib/jwt.js
 const te = new TextEncoder();
 
-function b64urlEncode(bytes) {
-  let bin = "";
-  for (let i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]);
-  return btoa(bin).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "");
+function b64url(bytes) {
+  const bin = String.fromCharCode(...bytes);
+  const b64 = btoa(bin);
+  return b64.replaceAll("+", "-").replaceAll("/", "_").replaceAll("=", "");
 }
 
-function b64urlDecodeToBytes(str) {
-  const pad = "=".repeat((4 - (str.length % 4)) % 4);
-  const s = (str + pad).replace(/-/g, "+").replace(/_/g, "/");
+function ub64url(s) {
+  s = s.replaceAll("-", "+").replaceAll("_", "/");
+  while (s.length % 4) s += "=";
   const bin = atob(s);
-  const out = new Uint8Array(bin.length);
-  for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
-  return out;
+  const bytes = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+  return bytes;
 }
 
-async function hmacSha256(secret, data) {
-  const key = await crypto.subtle.importKey(
-    "raw",
-    te.encode(secret),
-    { name: "HMAC", hash: "SHA-256" },
-    false,
-    ["sign", "verify"]
-  );
-  return crypto.subtle.sign("HMAC", key, te.encode(data));
+async function hmacSign(secret, data) {
+  const key = await crypto.subtle.importKey("raw", te.encode(secret), { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
+  const sig = await crypto.subtle.sign("HMAC", key, te.encode(data));
+  return new Uint8Array(sig);
 }
 
-export async function signJwt(payload, secret, opts = {}) {
+async function hmacVerify(secret, data, sigBytes) {
+  const key = await crypto.subtle.importKey("raw", te.encode(secret), { name: "HMAC", hash: "SHA-256" }, false, ["verify"]);
+  return await crypto.subtle.verify("HMAC", key, sigBytes, te.encode(data));
+}
+
+export async function signJwt(payload, secret, expSeconds = 60 * 60 * 24 * 14) {
   const header = { alg: "HS256", typ: "JWT" };
   const now = Math.floor(Date.now() / 1000);
-  const exp = opts.expiresInSec ? now + opts.expiresInSec : undefined;
+  const body = { ...payload, iat: now, exp: now + expSeconds };
 
-  const body = { ...payload, iat: now };
-  if (exp) body.exp = exp;
-
-  const h = b64urlEncode(te.encode(JSON.stringify(header)));
-  const p = b64urlEncode(te.encode(JSON.stringify(body)));
+  const h = b64url(te.encode(JSON.stringify(header)));
+  const p = b64url(te.encode(JSON.stringify(body)));
   const data = `${h}.${p}`;
-
-  const sig = await hmacSha256(secret, data);
-  const s = b64urlEncode(new Uint8Array(sig));
-  return `${data}.${s}`;
+  const sig = await hmacSign(secret, data);
+  return `${data}.${b64url(sig)}`;
 }
 
 export async function verifyJwt(token, secret) {
-  try {
-    const parts = String(token || "").split(".");
-    if (parts.length !== 3) return { ok: false, error: "Invalid token format" };
+  const parts = String(token || "").split(".");
+  if (parts.length !== 3) throw new Error("Invalid token");
 
-    const [h, p, s] = parts;
-    const data = `${h}.${p}`;
+  const [h, p, s] = parts;
+  const data = `${h}.${p}`;
+  const sigBytes = ub64url(s);
 
-    const key = await crypto.subtle.importKey(
-      "raw",
-      te.encode(secret),
-      { name: "HMAC", hash: "SHA-256" },
-      false,
-      ["verify"]
-    );
+  const ok = await hmacVerify(secret, data, sigBytes);
+  if (!ok) throw new Error("Invalid signature");
 
-    const sigBytes = b64urlDecodeToBytes(s);
-    const valid = await crypto.subtle.verify("HMAC", key, sigBytes, te.encode(data));
-    if (!valid) return { ok: false, error: "Bad signature" };
-
-    const payloadJson = new TextDecoder().decode(b64urlDecodeToBytes(p));
-    const payload = JSON.parse(payloadJson);
-
-    const now = Math.floor(Date.now() / 1000);
-    if (payload.exp && now > payload.exp) return { ok: false, error: "Token expired" };
-
-    return { ok: true, payload };
-  } catch (e) {
-    return { ok: false, error: e?.message || String(e) };
-  }
+  const payload = JSON.parse(new TextDecoder().decode(ub64url(p)));
+  const now = Math.floor(Date.now() / 1000);
+  if (payload.exp && now > payload.exp) throw new Error("Token expired");
+  return payload;
 }
-
-
