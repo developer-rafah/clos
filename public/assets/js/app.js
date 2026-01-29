@@ -1,658 +1,315 @@
-// app.js (APP MODULE) - Robust + No Infinite Loading
-// يعتمد على Namespace imports لتجنب انهيار التطبيق عند نقص export في ui.js
-// ويضيف Timeout + Error Handling حتى لا تبقى "جاري التحميل" للأبد.
-
+// app.js
 import * as UI from "./ui.js";
-import * as Router from "./router.js";
 import * as Auth from "./auth.js";
-import * as Api from "./api.js";
-import * as Config from "./app-config.js";
-import * as Push from "./push.js";
+import { apiGet, apiPatch, apiPost } from "./api.js";
+import { getRoute, goto, roleHome } from "./router.js";
 
-const APP_EL = document.getElementById("app") || document.body;
-
-const TOKEN_KEY_FALLBACK = "CLOS_TOKEN_V1";
-const REQUEST_TIMEOUT_MS = 15000;
+const root = document.getElementById("app") || document.body;
 
 const state = {
   user: null,
-  pushStatus: { supported: false, enabled: false },
-  agent: { view: "assigned", q: "", limit: 200 },
-  staff: { view: "new", q: "", limit: 200 },
-  admin: { view: "all", q: "", limit: 200 },
+  view: "",
+  q: "",
+  offset: 0,
+  limit: 20,
+  items: [],
+  pagination: null,
+  agents: [],
+  stats: {},
+  loading: false,
+  role: "",
 };
 
-function setHtml(html) {
-  APP_EL.innerHTML = html || "";
+function setHTML(html) {
+  root.innerHTML = html;
 }
 
-function defaultLoading(text = "جاري التحميل ...") {
-  return `
-    <div class="shell">
-      <div style="display:flex;align-items:center;justify-content:center;min-height:60vh;color:#fff;opacity:.9">
-        <div style="text-align:center">
-          <div style="width:46px;height:46px;border-radius:50%;border:4px solid rgba(255,255,255,.25);border-top-color:#7c5cff;display:inline-block;animation:spin 1s linear infinite"></div>
-          <div style="margin-top:14px;font-size:18px">${escapeHtml(text)}</div>
-        </div>
-      </div>
-      <style>@keyframes spin{to{transform:rotate(360deg)}} .shell{padding:24px}</style>
-    </div>
-  `;
+function roleKey(role) {
+  if (role === "مندوب") return "agent";
+  if (role === "موظف") return "staff";
+  if (role === "مدير") return "admin";
+  return role || "admin";
 }
 
-function defaultErrorScreen(title, message) {
-  return `
-    <div style="padding:24px;color:#fff">
-      <h2 style="margin:0 0 8px 0">${escapeHtml(title || "حدث خطأ")}</h2>
-      <div style="opacity:.9;line-height:1.6">${escapeHtml(message || "")}</div>
-      <div style="margin-top:16px;display:flex;gap:10px;flex-wrap:wrap">
-        <button id="btnReload" style="padding:10px 14px;border-radius:12px;border:0;background:#7c5cff;color:#fff;cursor:pointer">إعادة المحاولة</button>
-        <button id="btnToLogin" style="padding:10px 14px;border-radius:12px;border:1px solid rgba(255,255,255,.25);background:transparent;color:#fff;cursor:pointer">تسجيل الدخول</button>
-      </div>
-    </div>
-  `;
+function parseDefaultView(role) {
+  if (role === "agent") return "assigned";
+  if (role === "staff") return "new";
+  return "all";
 }
 
-function escapeHtml(s) {
-  return String(s ?? "")
-    .replaceAll("&", "&amp;")
-    .replaceAll("<", "&lt;")
-    .replaceAll(">", "&gt;")
-    .replaceAll('"', "&quot;")
-    .replaceAll("'", "&#039;");
+function safeMsg(err) {
+  return err?.message || "حدث خطأ غير متوقع";
 }
 
-function getToken() {
-  // حاول من auth.js إن كانت توفر دالة، وإلا fallback على localStorage
-  if (typeof Auth.getToken === "function") return Auth.getToken();
-  return localStorage.getItem(TOKEN_KEY_FALLBACK);
+async function loadAgentsIfNeeded(role) {
+  if (role === "agent") return [];
+  // جلب المندوبين للاسناد
+  const out = await apiGet("/api/users", { query: { role: "agent" } }).catch(() => ({ items: [] }));
+  return out?.items || out?.users || [];
 }
 
-function setToken(token) {
-  if (typeof Auth.setToken === "function") return Auth.setToken(token);
-  if (token) localStorage.setItem(TOKEN_KEY_FALLBACK, token);
-}
-
-function clearToken() {
-  if (typeof Auth.clearToken === "function") return Auth.clearToken();
-  localStorage.removeItem(TOKEN_KEY_FALLBACK);
-}
-
-async function fetchJson(url, { method = "GET", body, auth = true, timeoutMs = REQUEST_TIMEOUT_MS } = {}) {
-  const controller = new AbortController();
-  const t = setTimeout(() => controller.abort(), timeoutMs);
-
-  try {
-    const headers = { "Content-Type": "application/json" };
-    if (auth) {
-      const token = getToken();
-      if (token) headers.Authorization = `Bearer ${token}`;
-    }
-
-    const res = await fetch(url, {
-      method,
-      headers,
-      body: body ? JSON.stringify(body) : undefined,
-      signal: controller.signal,
-    });
-
-    const text = await res.text();
-    let json;
-    try {
-      json = text ? JSON.parse(text) : {};
-    } catch {
-      json = { ok: false, success: false, error: text || `HTTP ${res.status}` };
-    }
-
-    if (!res.ok || json?.ok === false || json?.success === false) {
-      const msg = json?.error || json?.message || `HTTP ${res.status}`;
-      throw new Error(msg);
-    }
-
-    return json;
-  } finally {
-    clearTimeout(t);
-  }
-}
-
-// واجهات API: إذا api.js يوفر apiGet/apiPost/apiPatch استخدمها، وإلا fallback على fetchJson
-async function apiGet(path) {
-  if (typeof Api.apiGet === "function") return Api.apiGet(path);
-  return fetchJson(path, { method: "GET" });
-}
-async function apiPost(path, body) {
-  if (typeof Api.apiPost === "function") return Api.apiPost(path, body);
-  return fetchJson(path, { method: "POST", body });
-}
-async function apiPatch(path, body) {
-  if (typeof Api.apiPatch === "function") return Api.apiPatch(path, body);
-  return fetchJson(path, { method: "PATCH", body });
-}
-
-function roleToHome(role) {
-  if (typeof Router.roleToHome === "function") return Router.roleToHome(role);
-  if (role === "admin" || role === "مدير") return "#/admin";
-  if (role === "staff" || role === "موظف") return "#/staff";
-  return "#/agent";
-}
-function goto(hash) {
-  if (typeof Router.goto === "function") return Router.goto(hash);
-  window.location.hash = hash;
-}
-function getRoute() {
-  if (typeof Router.getRoute === "function") return Router.getRoute();
-  return window.location.hash || "#/";
-}
-function parseRoute(hash) {
-  if (typeof Router.parseRoute === "function") return Router.parseRoute(hash);
-  const clean = (hash || "#/").replace(/^#\/?/, "");
-  const [name, ...rest] = clean.split("/");
-  return { name: name || "root", parts: rest };
-}
-
-function renderLoading(msg) {
-  return (typeof UI.renderLoading === "function" ? UI.renderLoading(msg) : defaultLoading(msg));
-}
-
-function showError(title, err) {
-  const msg = (err && (err.message || String(err))) || "غير معروف";
-  setHtml(defaultErrorScreen(title, msg));
-  const r = document.getElementById("btnReload");
-  const l = document.getElementById("btnToLogin");
-  r?.addEventListener("click", () => safeRender(renderCurrentRoute));
-  l?.addEventListener("click", () => showLogin());
-  console.error(err);
-}
-
-async function loadPushStatus() {
-  try {
-    state.pushStatus.supported = typeof Push.getPushStatus === "function";
-    if (typeof Push.getPushStatus === "function") {
-      state.pushStatus = await Push.getPushStatus();
-    }
-  } catch (e) {
-    // لا تمنع التطبيق
-    console.warn("push status error:", e);
-  }
-}
-
-function showLogin(errorText = "") {
-  const html =
-    (typeof UI.renderLogin === "function" && UI.renderLogin({ error: errorText })) ||
-    `
-      <div style="padding:24px;color:#fff;max-width:420px;margin:0 auto">
-        <h2 style="margin:0 0 14px 0">تسجيل الدخول</h2>
-        <form id="loginForm" style="display:grid;gap:10px">
-          <input id="username" placeholder="اسم المستخدم" style="padding:12px;border-radius:12px;border:1px solid rgba(255,255,255,.2);background:rgba(0,0,0,.2);color:#fff" />
-          <input id="password" type="password" placeholder="كلمة المرور" style="padding:12px;border-radius:12px;border:1px solid rgba(255,255,255,.2);background:rgba(0,0,0,.2);color:#fff" />
-          <button type="submit" style="padding:12px;border-radius:12px;border:0;background:#7c5cff;color:#fff;cursor:pointer">دخول</button>
-          <div id="loginError" style="color:#ffb4b4;min-height:20px">${escapeHtml(errorText)}</div>
-        </form>
-      </div>
-    `;
-
-  setHtml(html);
-
-  // إن كانت ui.js توفر bindLogin استعملها، وإلا bind يدوي
-  if (typeof UI.bindLogin === "function") {
-    try {
-      UI.bindLogin({
-        onSubmit: async ({ username, password }) => {
-          await doLogin(username, password);
-        },
-      });
-      return;
-    } catch (e) {
-      console.warn("UI.bindLogin failed, fallback manual binding:", e);
-    }
+async function loadStatsIfSupported(role) {
+  // لو عندك endpoint stats لاحقًا؛ الآن نعملها من counts عبر requests?view=...&limit=0
+  // لتخفيف الضغط: نجيب count فقط من pagination.count
+  async function count(view) {
+    const out = await apiGet("/api/requests", { query: { view, limit: 1, offset: 0 } });
+    return out?.pagination?.count ?? (out?.items?.length ?? 0);
   }
 
-  const form = document.getElementById("loginForm");
-  const errEl = document.getElementById("loginError");
-  form?.addEventListener("submit", async (ev) => {
-    ev.preventDefault();
-    errEl.textContent = "";
-    const username = document.getElementById("username")?.value?.trim();
-    const password = document.getElementById("password")?.value ?? "";
-    if (!username || !password) {
-      errEl.textContent = "يرجى إدخال اسم المستخدم وكلمة المرور";
-      return;
-    }
-    try {
-      await doLogin(username, password);
-    } catch (e) {
-      errEl.textContent = e?.message || "فشل تسجيل الدخول";
-    }
+  if (role === "agent") return {};
+  const [n, a, c, t] = await Promise.all([
+    count("new").catch(() => 0),
+    count("assigned").catch(() => 0),
+    count("closed").catch(() => 0),
+    count("all").catch(() => 0),
+  ]);
+  return { new: n, assigned: a, closed: c, total: t };
+}
+
+async function loadRequests({ role, view, q, offset, limit }) {
+  const out = await apiGet("/api/requests", {
+    query: { view, q, offset, limit },
   });
+  return out;
 }
 
-async function doLogin(username, password) {
-  setHtml(renderLoading("جاري تسجيل الدخول ..."));
-  let out;
-  if (typeof Auth.login === "function") {
-    out = await Auth.login(username, password);
-  } else {
-    out = await apiPost("/api/auth/login", { username, password });
-  }
-  if (out?.token) setToken(out.token);
-  // user قد يرجع داخل out.user أو داخل out.data
-  state.user = out?.user || out?.data?.user || out?.user || null;
-  if (!state.user) {
-    // إذا لم يرجع user، اجلبه من /me
-    const meOut = await apiGet("/api/auth/me");
-    state.user = meOut?.user || meOut;
-  }
-  await loadPushStatus();
-  goto(roleToHome(state.user.role));
-  await safeRender(renderCurrentRoute);
-}
-
-async function doLogout() {
-  try {
-    if (typeof Auth.logout === "function") await Auth.logout();
-  } catch {}
-  clearToken();
-  state.user = null;
-  showLogin();
-}
-
-async function getMe() {
-  if (typeof Auth.me === "function") return Auth.me();
-  const out = await apiGet("/api/auth/me");
-  return out?.user || out;
-}
-
-function bindGlobalActions() {
-  // Event Delegation: أي UI (قديمة/جديدة) نلتقط الأزرار
-  APP_EL.onclick = async (ev) => {
-    const a = ev.target.closest("[data-action]");
-    if (!a) return;
-
-    const action = a.dataset.action;
-    const id = a.dataset.id;
-
-    try {
-      switch (action) {
-        case "logout":
-          await doLogout();
-          return;
-
-        case "agentTab":
-          state.agent.view = a.dataset.view || "assigned";
-          await safeRender(renderCurrentRoute);
-          return;
-
-        case "agentRefresh":
-          await safeRender(renderCurrentRoute);
-          return;
-
-        case "staffTab":
-          state.staff.view = a.dataset.view || "new";
-          await safeRender(renderCurrentRoute);
-          return;
-
-        case "adminTab":
-          state.admin.view = a.dataset.view || "all";
-          await safeRender(renderCurrentRoute);
-          return;
-
-        case "reqCall": {
-          const phone = a.dataset.phone;
-          if (phone) window.open(`tel:${phone}`, "_self");
-          return;
-        }
-
-        case "reqWhatsapp": {
-          const phone = (a.dataset.phone || "").replace(/\D/g, "");
-          if (phone) window.open(`https://wa.me/${phone}`, "_blank");
-          return;
-        }
-
-        case "reqMap": {
-          const lat = a.dataset.lat;
-          const lng = a.dataset.lng;
-          if (lat && lng) {
-            window.open(`https://www.google.com/maps?q=${encodeURIComponent(lat)},${encodeURIComponent(lng)}`, "_blank");
-          }
-          return;
-        }
-
-        case "reqSaveWeight": {
-          if (!id) return;
-          // ابحث عن input الوزن داخل نفس البطاقة أو عبر selector عام
-          const card = a.closest("[data-req-card]") || document;
-          const input =
-            card.querySelector(`[data-weight-input="${id}"]`) ||
-            card.querySelector(`input[name="weight"]`) ||
-            document.getElementById(`weight-${id}`);
-          const weightVal = input?.value;
-          const weight = weightVal !== undefined ? Number(weightVal) : NaN;
-          if (!Number.isFinite(weight) || weight < 0) throw new Error("الوزن غير صحيح");
-
-          await apiPatch(`/api/requests/${encodeURIComponent(id)}`, { weight });
-          await safeRender(renderCurrentRoute);
-          return;
-        }
-
-        case "reqClose": {
-          if (!id) return;
-          // اغلاق الطلب (مكتمل)
-          await apiPatch(`/api/requests/${encodeURIComponent(id)}`, { status: "مكتمل" });
-          await safeRender(renderCurrentRoute);
-          return;
-        }
-
-        default:
-          return;
-      }
-    } catch (e) {
-      alert(e?.message || "حدث خطأ");
-      console.error(e);
-    }
-  };
-}
-
-async function renderAgent() {
-  const user = state.user;
-  setHtml(renderLoading("تحميل طلبات المندوب ..."));
-
-  const q = (state.agent.q || "").trim();
-  const view = state.agent.view || "assigned";
-  const limit = state.agent.limit || 200;
-
-  const qs = new URLSearchParams();
-  qs.set("view", view); // assigned | closed | all
-  qs.set("limit", String(limit));
-  if (q) qs.set("q", q);
-
-  const out = await apiGet(`/api/requests?${qs.toString()}`);
-  const items = out?.items || [];
-  const pagination = out?.pagination || null;
-
-  const html =
-    (typeof UI.renderAgent === "function" &&
-      UI.renderAgent({
-        user,
-        items,
-        view,
-        q,
-        pagination,
-        pushStatus: state.pushStatus,
-        error: "",
-      })) ||
-    `
-      <div style="padding:24px;color:#fff">
-        <h2 style="margin:0 0 8px 0">لوحة المندوب</h2>
-        <div style="opacity:.85;margin-bottom:14px">مرحبًا ${escapeHtml(user?.name || user?.username || "")}</div>
-        <pre style="white-space:pre-wrap;background:rgba(0,0,0,.25);padding:12px;border-radius:12px">${escapeHtml(
-          JSON.stringify(items, null, 2)
-        )}</pre>
-      </div>
-    `;
-
-  setHtml(html);
-
-  // دعم واجهات قديمة إن وُجدت
-  const btnLogout = document.getElementById("btnLogout");
-  btnLogout?.addEventListener("click", doLogout);
-
-  const search = document.getElementById("agentSearch");
-  const btnSearch = document.getElementById("btnAgentSearch");
-  const btnAssigned = document.getElementById("btnAgentAssigned");
-  const btnClosed = document.getElementById("btnAgentClosed");
-  const btnRefresh = document.getElementById("btnAgentRefresh");
-
-  btnRefresh?.addEventListener("click", () => safeRender(renderCurrentRoute));
-  btnAssigned?.addEventListener("click", () => {
-    state.agent.view = "assigned";
-    safeRender(renderCurrentRoute);
-  });
-  btnClosed?.addEventListener("click", () => {
-    state.agent.view = "closed";
-    safeRender(renderCurrentRoute);
-  });
-  btnSearch?.addEventListener("click", () => {
-    state.agent.q = search?.value || "";
-    safeRender(renderCurrentRoute);
-  });
-}
-
-async function renderStaff() {
-  const user = state.user;
-  setHtml(renderLoading("تحميل لوحة الموظف ..."));
-
-  const q = (state.staff.q || "").trim();
-  const view = state.staff.view || "new";
-  const limit = state.staff.limit || 200;
-
-  const qs = new URLSearchParams();
-  qs.set("view", view);
-  qs.set("limit", String(limit));
-  if (q) qs.set("q", q);
-
-  let out;
-  try {
-    out = await apiGet(`/api/requests?${qs.toString()}`);
-  } catch (e) {
-    // مثال معروف عندك: Missing area_code...
-    const html =
-      (typeof UI.renderStaff === "function" &&
-        UI.renderStaff({
-          user,
-          items: [],
-          view,
-          q,
-          pagination: null,
-          error: e?.message || "خطأ",
-        })) ||
-      defaultErrorScreen("لوحة الموظف", e?.message || "تعذر تحميل البيانات");
-    setHtml(html);
-    document.getElementById("btnReload")?.addEventListener("click", () => safeRender(renderCurrentRoute));
-    document.getElementById("btnToLogin")?.addEventListener("click", showLogin);
-    return;
-  }
-
-  const items = out?.items || [];
-  const pagination = out?.pagination || null;
-
-  const html =
-    (typeof UI.renderStaff === "function" &&
-      UI.renderStaff({
-        user,
-        items,
-        view,
-        q,
-        pagination,
-        error: "",
-      })) ||
-    `
-      <div style="padding:24px;color:#fff">
-        <h2 style="margin:0 0 8px 0">لوحة الموظف</h2>
-        <pre style="white-space:pre-wrap;background:rgba(0,0,0,.25);padding:12px;border-radius:12px">${escapeHtml(
-          JSON.stringify(items, null, 2)
-        )}</pre>
-      </div>
-    `;
-
-  setHtml(html);
-  document.getElementById("btnLogout")?.addEventListener("click", doLogout);
-}
-
-async function renderAdmin() {
-  const user = state.user;
-  setHtml(renderLoading("تحميل لوحة المدير ..."));
-
-  const q = (state.admin.q || "").trim();
-  const view = state.admin.view || "all";
-  const limit = state.admin.limit || 200;
-
-  const qs = new URLSearchParams();
-  qs.set("view", view);
-  qs.set("limit", String(limit));
-  if (q) qs.set("q", q);
-
-  let out;
-  try {
-    out = await apiGet(`/api/requests?${qs.toString()}`);
-  } catch (e) {
-    const html =
-      (typeof UI.renderAdmin === "function" &&
-        UI.renderAdmin({
-          user,
-          items: [],
-          view,
-          q,
-          pagination: null,
-          kpis: null,
-          agents: [],
-          error: e?.message || "خطأ",
-        })) ||
-      defaultErrorScreen("لوحة المدير", e?.message || "تعذر تحميل البيانات");
-    setHtml(html);
-    document.getElementById("btnReload")?.addEventListener("click", () => safeRender(renderCurrentRoute));
-    document.getElementById("btnToLogin")?.addEventListener("click", showLogin);
-    return;
-  }
-
-  const items = out?.items || [];
-  const pagination = out?.pagination || null;
-
-  // مؤشرات بسيطة من نفس البيانات (بدون اعتماد على backend)
-  const kpis = {
-    total: items.length,
-    new: items.filter((x) => x?.status === "جديد").length,
-    assigned: items.filter((x) => x?.status === "مسند").length,
-    closed: items.filter((x) => x?.status === "مكتمل").length,
-    cancelled: items.filter((x) => x?.status === "ملغي").length,
+function renderPage({ error } = {}) {
+  const role = state.role;
+  const payload = {
+    user: state.user,
+    items: state.items,
+    view: state.view,
+    q: state.q,
+    pagination: state.pagination,
+    agents: state.agents,
+    stats: state.stats,
+    error: error || "",
   };
 
-  // اجلب المستخدمين (إن كان endpoint موجود)
-  let agents = [];
-  try {
-    const u = await apiGet("/api/users?role=agent&limit=500");
-    agents = u?.items || u?.users || [];
-  } catch {
-    agents = [];
-  }
-
-  const html =
-    (typeof UI.renderAdmin === "function" &&
-      UI.renderAdmin({
-        user,
-        items,
-        view,
-        q,
-        pagination,
-        kpis,
-        agents,
-        error: "",
-      })) ||
-    `
-      <div style="padding:24px;color:#fff">
-        <h2 style="margin:0 0 8px 0">لوحة المدير</h2>
-        <div style="opacity:.85;margin-bottom:14px">الإجمالي: ${kpis.total} | جديد: ${kpis.new} | مسند: ${kpis.assigned} | مكتمل: ${kpis.closed}</div>
-        <pre style="white-space:pre-wrap;background:rgba(0,0,0,.25);padding:12px;border-radius:12px">${escapeHtml(
-          JSON.stringify(items, null, 2)
-        )}</pre>
-      </div>
-    `;
-
-  setHtml(html);
-  document.getElementById("btnLogout")?.addEventListener("click", doLogout);
+  if (role === "agent") return UI.renderAgent(payload);
+  if (role === "staff") return UI.renderStaff(payload);
+  return UI.renderAdmin(payload);
 }
 
-async function renderCurrentRoute() {
-  if (!state.user) {
-    showLogin();
-    return;
-  }
-
-  const user = state.user;
-  const route = parseRoute(getRoute());
-
-  // لو المستخدم على root حوله تلقائيًا
-  if (!route?.name || route.name === "root") {
-    goto(roleToHome(user.role));
-    return;
-  }
-
-  // حماية من عدم تطابق الدور مع الصفحة
-  const role = String(user.role || "").toLowerCase();
-  if (route.name === "admin" && !(role.includes("admin") || user.role === "مدير")) {
-    goto(roleToHome(user.role));
-    return;
-  }
-  if (route.name === "staff" && !(role.includes("staff") || user.role === "موظف")) {
-    goto(roleToHome(user.role));
-    return;
-  }
-  if (route.name === "agent" && !(role.includes("agent") || user.role === "مندوب")) {
-    goto(roleToHome(user.role));
-    return;
-  }
-
-  // Render
-  if (route.name === "agent") return renderAgent();
-  if (route.name === "staff") return renderStaff();
-  if (route.name === "admin") return renderAdmin();
-
-  // أي route غير معروف → بدل ترك التحميل، اعرض خطأ واضح
-  setHtml(defaultErrorScreen("Route غير معروف", `المسار الحالي: ${route.name}`));
-  document.getElementById("btnReload")?.addEventListener("click", () => safeRender(renderCurrentRoute));
-  document.getElementById("btnToLogin")?.addEventListener("click", showLogin);
-}
-
-async function safeRender(fn) {
+async function ensureAuth() {
+  if (state.user) return state.user;
   try {
-    await fn();
-  } catch (e) {
-    showError("حدث خطأ أثناء العرض", e);
-  }
-}
-
-async function boot() {
-  // لا تترك تحميل بلا نهاية إذا حدث أي خطأ غير ملتقط
-  window.addEventListener("unhandledrejection", (e) => {
-    e.preventDefault?.();
-    showError("Unhandled Promise Rejection", e.reason || e);
-  });
-  window.addEventListener("error", (e) => {
-    showError("JavaScript Error", e.error || e.message || e);
-  });
-
-  setHtml(renderLoading("جاري التحميل ..."));
-
-  // تحميل config إن وُجد (لا تفشل التطبيق لو لم يوجد)
-  try {
-    if (typeof Config.loadAppConfig === "function") await Config.loadAppConfig();
-    if (typeof Api.setBaseUrlFromConfig === "function") Api.setBaseUrlFromConfig();
-  } catch (e) {
-    console.warn("config load warning:", e);
-  }
-
-  bindGlobalActions();
-
-  // جلسة المستخدم
-  try {
-    state.user = await getMe();
+    const u = await Auth.me();
+    if (!u) throw new Error("Unauthorized");
+    state.user = u;
+    state.role = roleKey(u.role);
+    return u;
   } catch {
     state.user = null;
+    state.role = "";
+    return null;
   }
-
-  if (!state.user) {
-    showLogin();
-    return;
-  }
-
-  await loadPushStatus();
-
-  // لو على root → حوله
-  const route = parseRoute(getRoute());
-  if (!route?.name || route.name === "root") goto(roleToHome(state.user.role));
-
-  await safeRender(renderCurrentRoute);
-
-  window.addEventListener("hashchange", () => safeRender(renderCurrentRoute));
 }
 
-boot().catch((e) => showError("فشل تشغيل التطبيق", e));
+function showLogin(error) {
+  setHTML(UI.renderLogin({ error }));
+  UI.bindLogin(root, async (username, password) => {
+    setHTML(UI.renderLoading("... جاري تسجيل الدخول"));
+    const u = await Auth.login(username, password);
+    if (!u) throw new Error("بيانات الدخول غير صحيحة");
+    state.user = u;
+    state.role = roleKey(u.role);
+    goto(roleHome(state.role), {});
+    await route();
+  });
+}
+
+async function route() {
+  if (state.loading) return;
+  state.loading = true;
+
+  try {
+    const u = await ensureAuth();
+    if (!u) {
+      showLogin();
+      return;
+    }
+
+    const { path, query } = getRoute();
+    const role = state.role;
+
+    // حماية المسارات
+    const wanted =
+      path === "/agent" || path === "/staff" || path === "/admin"
+        ? path
+        : roleHome(role);
+
+    if (path !== wanted) {
+      goto(wanted, query);
+      state.loading = false;
+      return;
+    }
+
+    // view/q/pagination
+    state.view = query.view || parseDefaultView(role);
+    state.q = query.q || "";
+    state.offset = Number(query.offset || 0) || 0;
+    state.limit = Number(query.limit || state.limit) || state.limit;
+
+    setHTML(UI.renderLoading("... جاري التحميل"));
+
+    // تحميل بيانات مساعدة
+    state.agents = await loadAgentsIfNeeded(role).catch(() => []);
+    state.stats = await loadStatsIfSupported(role).catch(() => ({}));
+
+    const out = await loadRequests({
+      role,
+      view: state.view,
+      q: state.q,
+      offset: state.offset,
+      limit: state.limit,
+    });
+
+    state.items = out?.items || [];
+    state.pagination = out?.pagination || {
+      limit: state.limit,
+      offset: state.offset,
+      count: state.items.length,
+    };
+
+    setHTML(renderPage());
+  } catch (err) {
+    // أهم شيء: لا تترك الشاشة على "جاري التحميل"
+    setHTML(renderPage({ error: safeMsg(err) }));
+  } finally {
+    state.loading = false;
+  }
+}
+
+// ============ Actions (Event Delegation) ============
+function getSearchValue() {
+  return root.querySelector('input[data-role="search"]')?.value?.trim() || "";
+}
+
+async function doRefresh({ keepOffset = false } = {}) {
+  const { path } = getRoute();
+  const q = getSearchValue();
+  goto(path, {
+    view: state.view,
+    q,
+    offset: keepOffset ? state.offset : 0,
+    limit: state.limit,
+  });
+  await route();
+}
+
+async function doLoadMore() {
+  const { path } = getRoute();
+  const nextOffset = (state.pagination?.offset ?? state.offset) + (state.pagination?.limit ?? state.limit);
+  goto(path, {
+    view: state.view,
+    q: state.q,
+    offset: nextOffset,
+    limit: state.limit,
+  });
+  await route();
+}
+
+async function doSetView(view) {
+  const { path } = getRoute();
+  goto(path, { view, q: state.q, offset: 0, limit: state.limit });
+  await route();
+}
+
+async function doAssign(id) {
+  const sel = root.querySelector(`select[data-id="${CSS.escape(id)}"][data-role="agentSelect"]`);
+  const agent_username = sel?.value || "";
+  if (!agent_username) throw new Error("اختر مندوب أولاً");
+
+  // ✅ نعتمد agent_name كـ “المعرف” (username) لضمان الثبات
+  await apiPatch(`/api/requests/${encodeURIComponent(id)}`, { agent_name: agent_username });
+}
+
+async function doSaveWeight(id) {
+  const inp = root.querySelector(`input[data-id="${CSS.escape(id)}"][data-role="weightInput"]`);
+  const weight = inp?.value ?? "";
+  if (weight === "") throw new Error("أدخل الوزن أولاً");
+  await apiPatch(`/api/requests/${encodeURIComponent(id)}`, { weight });
+}
+
+async function doClose(id) {
+  await apiPatch(`/api/requests/${encodeURIComponent(id)}`, { close: true });
+}
+
+document.addEventListener("click", async (e) => {
+  const btn = e.target.closest("[data-action]");
+  if (!btn) return;
+  const action = btn.dataset.action;
+  const id = btn.dataset.id;
+
+  try {
+    if (action === "logout") {
+      Auth.logout();
+      state.user = null;
+      state.role = "";
+      showLogin("تم تسجيل الخروج");
+      return;
+    }
+
+    if (action === "refresh") {
+      await doRefresh();
+      return;
+    }
+
+    if (action === "loadMore") {
+      await doLoadMore();
+      return;
+    }
+
+    if (action === "setView") {
+      await doSetView(btn.dataset.view || "");
+      return;
+    }
+
+    if (action === "reqAssign") {
+      setHTML(UI.renderLoading("... جاري الإسناد"));
+      await doAssign(id);
+      await doRefresh({ keepOffset: false });
+      return;
+    }
+
+    if (action === "reqWeight") {
+      setHTML(UI.renderLoading("... جاري حفظ الوزن"));
+      await doSaveWeight(id);
+      await doRefresh({ keepOffset: true });
+      return;
+    }
+
+    if (action === "reqClose") {
+      setHTML(UI.renderLoading("... جاري إغلاق الطلب"));
+      await doClose(id);
+      await doRefresh({ keepOffset: false });
+      return;
+    }
+
+    if (action === "enablePush") {
+      // عندك push.js ممكن تربطه هنا لاحقاً
+      alert("ميزة الإشعارات تعتمد على Service Worker (يمكن تفعيلها لاحقاً).");
+      return;
+    }
+  } catch (err) {
+    // لا تترك المستخدم على Loading
+    setHTML(renderPage({ error: safeMsg(err) }));
+  }
+});
+
+document.addEventListener("keydown", async (e) => {
+  // Enter في البحث
+  if (e.key === "Enter" && e.target && e.target.matches('input[data-role="search"]')) {
+    e.preventDefault();
+    await doRefresh();
+  }
+});
+
+window.addEventListener("hashchange", route);
+
+(async function boot() {
+  // افتراضي
+  if (!location.hash) location.hash = "#/";
+  await route();
+})();
