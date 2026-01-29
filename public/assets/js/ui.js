@@ -1,415 +1,429 @@
-// public/assets/js/ui.js
+// ui.js
+const AR_ROLE = {
+  admin: "مدير",
+  staff: "موظف",
+  agent: "مندوب",
+  "مدير": "مدير",
+  "موظف": "موظف",
+  "مندوب": "مندوب",
+};
 
-export function escapeHtml(s) {
-  return String(s || "").replace(/[&<>"']/g, (ch) => ({
-    "&": "&amp;",
-    "<": "&lt;",
-    ">": "&gt;",
-    '"': "&quot;",
-    "'": "&#039;",
-  }[ch]));
+function esc(s) {
+  return String(s ?? "")
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#039;");
 }
 
-export function renderShell(contentHtml) {
+function normalizePhone(p) {
+  const s = String(p || "").replace(/[^\d]/g, "");
+  // لو رقم سعودي بدون 966
+  if (s.length === 9 && s.startsWith("5")) return `966${s}`;
+  if (s.length === 10 && s.startsWith("05")) return `966${s.slice(1)}`;
+  if (s.startsWith("966")) return s;
+  return s;
+}
+
+function statusLabel(r) {
+  if (r?.cancelled_at) return "ملغي";
+  if (r?.closed_at) return "مكتمل";
+  if (r?.agent_name) return "مسند";
+  return "جديد";
+}
+
+function pill(label) {
+  const cls =
+    label === "مكتمل" ? "pill green" :
+    label === "مسند" ? "pill blue" :
+    label === "ملغي" ? "pill red" :
+    "pill gray";
+  return `<span class="${cls}">${esc(label)}</span>`;
+}
+
+export function renderShell({ user, title, subtitle, body, error }) {
+  const role = AR_ROLE[user?.role] || user?.role || "";
+  const name = user?.name || user?.username || "";
   return `
-    <div class="app">
-      <div class="card">
-        ${contentHtml}
+  <style>
+    :root{
+      --bg1:#0b0920; --bg2:#140a17; --card:#2a2540cc; --card2:#332c50cc;
+      --txt:#f2f2ff; --muted:#b9b7d2; --stroke:#ffffff1f;
+      --pri:#6b4dff; --pri2:#8a7bff;
+      --green:#2ecc71; --red:#ff4d6d; --blue:#4d9cff; --gray:#9aa0a6;
+    }
+    *{box-sizing:border-box}
+    body{margin:0;font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial; color:var(--txt);
+      background:radial-gradient(1200px 700px at 70% 10%, #2f1b87 0%, transparent 55%),
+                 radial-gradient(900px 600px at 20% 90%, #7a225b 0%, transparent 55%),
+                 linear-gradient(180deg,var(--bg1),var(--bg2));
+      min-height:100vh;
+    }
+    .wrap{max-width:1100px;margin:0 auto;padding:28px 18px}
+    .card{border:1px solid var(--stroke); background:linear-gradient(180deg,var(--card),var(--card2));
+      border-radius:26px; padding:22px; box-shadow:0 25px 70px #00000055;
+    }
+    .top{display:flex;align-items:center;justify-content:space-between;gap:12px}
+    .brand{display:flex;align-items:center;gap:10px}
+    .logo{width:44px;height:44px;border-radius:14px;border:1px solid var(--stroke);
+      display:grid;place-items:center;background:#ffffff0d}
+    .title{font-size:40px;font-weight:800;margin:6px 0 0}
+    .sub{color:var(--muted);margin-top:6px}
+    .row{display:flex;gap:10px;flex-wrap:wrap;align-items:center}
+    .btn{border:1px solid var(--stroke); background:#ffffff0a;color:var(--txt);
+      border-radius:16px;padding:10px 14px;cursor:pointer; font-weight:700;
+    }
+    .btn.pri{background:linear-gradient(180deg,var(--pri),var(--pri2)); border:none}
+    .btn.danger{background:#ff4d6d22;border:1px solid #ff4d6d55}
+    .btn:disabled{opacity:.6;cursor:not-allowed}
+    .hr{height:1px;background:var(--stroke);margin:16px 0}
+    .err{margin-top:14px;padding:12px 14px;border-radius:14px;background:#ff4d6d22;border:1px solid #ff4d6d55;color:#ffd6df}
+    .muted{color:var(--muted)}
+    .pill{padding:6px 10px;border-radius:999px;font-weight:800;font-size:12px;border:1px solid var(--stroke)}
+    .pill.green{background:#2ecc7122;border-color:#2ecc7155}
+    .pill.red{background:#ff4d6d22;border-color:#ff4d6d55}
+    .pill.blue{background:#4d9cff22;border-color:#4d9cff55}
+    .pill.gray{background:#9aa0a622;border-color:#9aa0a655}
+    .grid{display:grid;gap:12px}
+    .kpis{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px}
+    .kpi{border:1px solid var(--stroke);background:#ffffff0a;border-radius:18px;padding:12px}
+    .kpi b{font-size:22px}
+    .toolbar{display:flex;gap:10px;flex-wrap:wrap;align-items:center;justify-content:space-between}
+    .search{flex:1;min-width:220px}
+    input,select{width:100%;border:1px solid var(--stroke);background:#ffffff0a;color:var(--txt);
+      border-radius:16px;padding:12px 14px;outline:none
+    }
+    .list{display:grid;gap:12px;margin-top:14px}
+    .item{border:1px solid var(--stroke);background:#ffffff0a;border-radius:20px;padding:14px}
+    .itemTop{display:flex;justify-content:space-between;gap:10px;align-items:flex-start;flex-wrap:wrap}
+    .id{font-weight:900}
+    .meta{display:grid;gap:6px;color:var(--muted);font-size:13px}
+    .actions{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+    .map{border-radius:16px;overflow:hidden;border:1px solid var(--stroke);margin-top:10px}
+    .small{font-size:12px}
+    @media (max-width:900px){ .kpis{grid-template-columns:repeat(2,minmax(0,1fr))} .title{font-size:34px}}
+  </style>
+
+  <div class="wrap">
+    <div class="card">
+      <div class="top">
+        <div class="brand">
+          <div class="logo">😊</div>
+          <div>
+            <div style="font-weight:900;font-size:22px">Clos <span class="muted" style="font-weight:600">جمعية رفح</span></div>
+            <div class="muted small">${esc(title || "")}</div>
+          </div>
+        </div>
+        <div class="row">
+          ${user ? `<span class="muted">مرحباً <b>${esc(name)}</b></span>` : ""}
+          ${user ? `<span class="pill gray">الدور: ${esc(role)}</span>` : ""}
+          ${user ? `<button class="btn danger" data-action="logout">تسجيل الخروج</button>` : ""}
+        </div>
+      </div>
+
+      ${subtitle ? `<div class="sub">${esc(subtitle)}</div>` : ""}
+      <div class="hr"></div>
+
+      ${error ? `<div class="err">${esc(error)}</div>` : ""}
+      ${body || ""}
+
+      <div class="hr"></div>
+      <div class="row" style="justify-content:space-between">
+        <div class="muted small">Clos - Rafah ©</div>
+        <button class="btn" data-action="enablePush">الإشعارات 🔔</button>
       </div>
     </div>
+  </div>
   `;
 }
 
-export function renderLoading(msg = "جاري التحميل...") {
-  return renderShell(`
-    <div class="center">
-      <div class="spinner"></div>
-      <div class="muted">${escapeHtml(msg)}</div>
+export function renderLoading(msg = "... جاري التحميل") {
+  return renderShell({
+    user: null,
+    title: "",
+    subtitle: "",
+    body: `<div style="display:grid;place-items:center;min-height:45vh">
+      <div style="display:grid;gap:10px;place-items:center">
+        <div style="width:44px;height:44px;border-radius:50%;border:5px solid #ffffff22;border-top-color:var(--pri);animation:spin 1s linear infinite"></div>
+        <div class="muted">${esc(msg)}</div>
+      </div>
     </div>
-  `);
-}
-
-export function renderLogin({ error = "" } = {}) {
-  return renderShell(`
-    <div>
-      <h1 class="h1">تسجيل الدخول</h1>
-      <div class="muted">سجّل دخولك للوصول للطلبات.</div>
-
-      <div class="hr"></div>
-
-      <form id="loginForm">
-        <div class="label">اسم المستخدم</div>
-        <input class="input" name="username" autocomplete="username" inputmode="text" />
-
-        <div class="label">كلمة المرور</div>
-        <input class="input" name="password" type="password" autocomplete="current-password" />
-
-        <div class="row" style="margin-top:14px;align-items:center;gap:10px;">
-          <button class="btn" type="submit">دخول</button>
-          <span class="small">سيتم حفظ الجلسة تلقائيًا.</span>
-        </div>
-
-        ${error ? `<div class="alert" style="margin-top:14px;">${escapeHtml(error)}</div>` : ``}
-      </form>
-    </div>
-  `);
-}
-
-export function bindLogin(root, onSubmit) {
-  const form = root.querySelector("#loginForm");
-  if (!form) return;
-  form.addEventListener("submit", (e) => {
-    e.preventDefault();
-    const fd = new FormData(form);
-    onSubmit({
-      username: String(fd.get("username") || "").trim(),
-      password: String(fd.get("password") || "").trim(),
-    });
+    <style>@keyframes spin{to{transform:rotate(360deg)}}</style>`,
   });
 }
 
-function pillStatus(status) {
-  const s = String(status || "").trim();
-  const color =
-    s === "مكتمل" ? "#22c55e" :
-    s === "ملغي"  ? "#ef4444" :
-    s === "جديد"  ? "#3b82f6" : "#a855f7";
-
-  return `<span class="pill" style="border-color:${color};color:${color}">${escapeHtml(s || "—")}</span>`;
+export function renderLogin({ error } = {}) {
+  return renderShell({
+    user: null,
+    title: "تسجيل الدخول",
+    subtitle: "أدخل اسم المستخدم وكلمة المرور",
+    error: error || "",
+    body: `
+      <form id="loginForm" class="grid" style="max-width:420px;margin:0 auto">
+        <input id="username" name="username" autocomplete="username" placeholder="اسم المستخدم" required />
+        <input id="password" name="password" type="password" autocomplete="current-password" placeholder="كلمة المرور" required />
+        <div id="loginError" class="err" style="display:none"></div>
+        <div class="row" style="justify-content:center">
+          <button class="btn pri" type="submit">تسجيل الدخول</button>
+        </div>
+      </form>
+    `,
+  });
 }
 
-function googleMapEmbed(lat, lng) {
-  const la = Number(lat), ln = Number(lng);
-  if (!Number.isFinite(la) || !Number.isFinite(ln)) return "";
-  const q = encodeURIComponent(`${la},${ln}`);
+/**
+ * ✅ bindLogin متوافق مع كل الاستدعاءات:
+ * - bindLogin(rootElement, onSubmit)
+ * - bindLogin(onSubmit)
+ * - bindLogin({ root, onSubmit })
+ */
+export function bindLogin(arg1, arg2) {
+  let root = document;
+  let onSubmit = null;
+
+  if (typeof arg1 === "function") {
+    onSubmit = arg1;
+  } else if (arg1 && typeof arg1 === "object" && typeof arg1.onSubmit === "function") {
+    onSubmit = arg1.onSubmit;
+    root = arg1.root && typeof arg1.root.querySelector === "function" ? arg1.root : document;
+  } else {
+    root = arg1 && typeof arg1.querySelector === "function" ? arg1 : document;
+    onSubmit = typeof arg2 === "function" ? arg2 : null;
+  }
+
+  const form = root.querySelector("#loginForm");
+  if (!form || !onSubmit) return;
+
+  form.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const u = root.querySelector("#username")?.value?.trim() || "";
+    const p = root.querySelector("#password")?.value || "";
+    const btn = form.querySelector('button[type="submit"]');
+    const errBox = root.querySelector("#loginError");
+
+    try {
+      if (btn) btn.disabled = true;
+      if (errBox) { errBox.style.display = "none"; errBox.textContent = ""; }
+      await onSubmit(u, p);
+    } catch (err) {
+      const msg = err?.message || "فشل تسجيل الدخول";
+      if (errBox) { errBox.style.display = "block"; errBox.textContent = msg; }
+    } finally {
+      if (btn) btn.disabled = false;
+    }
+  });
+}
+
+function renderToolbar({ viewButtons = [], q = "", extraRight = "" }) {
   return `
-    <div style="margin-top:10px;border-radius:14px;overflow:hidden;border:1px solid rgba(255,255,255,.12)">
-      <iframe
-        loading="lazy"
-        referrerpolicy="no-referrer-when-downgrade"
-        style="width:100%;height:220px;border:0"
-        src="https://www.google.com/maps?q=${q}&z=15&output=embed">
-      </iframe>
+    <div class="toolbar">
+      <div class="row" style="flex:1">
+        <div class="search"><input data-role="search" placeholder="بحث (اسم/رقم/حي/رقم طلب)" value="${esc(q)}" /></div>
+        <button class="btn pri" data-action="refresh">تحديث</button>
+      </div>
+      <div class="row">
+        ${viewButtons.map(b => `
+          <button class="btn ${b.active ? "pri" : ""}" data-action="setView" data-view="${esc(b.view)}">
+            ${esc(b.label)}
+          </button>`).join("")}
+        ${extraRight || ""}
+      </div>
     </div>
   `;
 }
 
-function toE164SA(phone) {
-  const p = String(phone || "").replace(/\D+/g, "");
-  if (!p) return "";
-  if (p.startsWith("966")) return p;
-  if (p.startsWith("05") && p.length === 10) return "966" + p.slice(1);
-  if (p.startsWith("5") && p.length === 9) return "966" + p;
-  return "";
-}
+function renderItem(r, mode, agents = []) {
+  const id = r.id || "";
+  const customerName = r.customer_name ?? r.customer_nan ?? r.customer_nam ?? "";
+  const phone = r.phone ?? "";
+  const district = r.district ?? "";
+  const lat = r.lat ?? null;
+  const lng = r.lng ?? null;
+  const w = r.weight ?? "";
+  const agentName = r.agent_name ?? "";
+  const st = statusLabel(r);
 
-function renderTopBar({ user }) {
-  const role = escapeHtml(user?.role || "");
-  const name = escapeHtml(user?.name || user?.username || "");
+  const phoneNorm = normalizePhone(phone);
+  const wa = phoneNorm ? `https://wa.me/${phoneNorm}` : "";
+  const tel = phone ? `tel:${esc(phone)}` : "";
+  const mapUrl =
+    lat != null && lng != null
+      ? `https://www.google.com/maps?q=${encodeURIComponent(String(lat))},${encodeURIComponent(String(lng))}`
+      : "";
+
+  const mapFrame =
+    lat != null && lng != null
+      ? `<div class="map">
+          <iframe
+            width="100%" height="220" style="border:0"
+            loading="lazy" allowfullscreen
+            referrerpolicy="no-referrer-when-downgrade"
+            src="https://maps.google.com/maps?q=${encodeURIComponent(String(lat))},${encodeURIComponent(String(lng))}&z=16&output=embed">
+          </iframe>
+        </div>`
+      : "";
+
+  const assignUI =
+    mode === "staff" || mode === "admin"
+      ? `
+        <div class="row" style="margin-top:10px">
+          <select data-role="agentSelect" data-id="${esc(id)}">
+            <option value="">اختر مندوب…</option>
+            ${agents
+              .map((a) => {
+                const v = a.username || "";
+                const label = `${a.name || a.username} (${a.username})`;
+                return `<option value="${esc(v)}" ${v === agentName ? "selected" : ""}>${esc(label)}</option>`;
+              })
+              .join("")}
+          </select>
+          <button class="btn pri" data-action="reqAssign" data-id="${esc(id)}">إسناد</button>
+        </div>
+      `
+      : "";
+
+  const agentOps =
+    mode === "agent"
+      ? `
+        <div class="row" style="margin-top:10px">
+          <input style="max-width:220px" data-role="weightInput" data-id="${esc(id)}" placeholder="الوزن" value="${esc(w)}" />
+          <button class="btn pri" data-action="reqWeight" data-id="${esc(id)}">حفظ الوزن</button>
+          <button class="btn danger" data-action="reqClose" data-id="${esc(id)}">إغلاق الطلب ✅</button>
+        </div>
+      `
+      : "";
+
   return `
-    <div class="row" style="justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;">
-      <div>
-        <h1 class="h1">مرحبًا ${name}</h1>
-        <div class="muted">الدور: <span class="pill">${role}</span></div>
+    <div class="item" data-id="${esc(id)}">
+      <div class="itemTop">
+        <div>
+          <div class="id">${esc(id)}</div>
+          <div class="meta">
+            <div><b>${esc(customerName || "—")}</b> ${pill(st)}</div>
+            <div>📞 ${esc(phone || "—")}</div>
+            <div>📍 ${esc(district || "—")}</div>
+            ${agentName ? `<div>👤 المندوب: <b>${esc(agentName)}</b></div>` : ""}
+          </div>
+        </div>
+        <div class="actions">
+          <button class="btn" ${tel ? `onclick="location.href='${tel}'"` : "disabled"}>اتصال</button>
+          <button class="btn" ${wa ? `onclick="window.open('${wa}','_blank')"` : "disabled"}>واتساب</button>
+          <button class="btn" ${mapUrl ? `onclick="window.open('${mapUrl}','_blank')"` : "disabled"}>الخريطة</button>
+        </div>
       </div>
 
-      <div class="row" style="gap:10px;flex-wrap:wrap;">
-        <button id="btnEnablePush" class="btn btn--ghost" type="button">تفعيل الإشعارات</button>
-        <button id="btnLogout" class="btn btn--danger" type="button">تسجيل الخروج</button>
+      ${assignUI}
+      ${agentOps}
+      ${mapFrame}
+    </div>
+  `;
+}
+
+function renderList({ items = [], mode, agents = [] }) {
+  if (!items.length) return `<div class="muted" style="text-align:center;margin:18px 0">لا توجد طلبات حالياً</div>`;
+  return `<div class="list">${items.map((r) => renderItem(r, mode, agents)).join("")}</div>`;
+}
+
+export function renderAgent({ user, items, view, q, pagination, error }) {
+  const viewButtons = [
+    { view: "assigned", label: "المسندة", active: view === "assigned" },
+    { view: "closed", label: "المكتملة", active: view === "closed" },
+  ];
+
+  const shown = items?.length || 0;
+  const total = pagination?.count ?? shown;
+  const canMore = pagination && pagination.offset + pagination.limit < total;
+
+  return renderShell({
+    user,
+    title: "لوحة المندوب",
+    subtitle: "تظهر هنا الطلبات المسندة لك فقط (مع إمكانية عرض المكتملة).",
+    error,
+    body: `
+      ${renderToolbar({ viewButtons, q })}
+      <div class="muted small" style="margin-top:8px">المعروض: ${shown} / ${total}</div>
+      ${renderList({ items, mode: "agent" })}
+      ${canMore ? `<div class="row" style="justify-content:center;margin-top:12px">
+        <button class="btn" data-action="loadMore">تحميل المزيد</button>
+      </div>` : ""}
+    `,
+  });
+}
+
+export function renderStaff({ user, items, view, q, pagination, agents = [], stats = {}, error }) {
+  const viewButtons = [
+    { view: "new", label: "طلبات جديدة", active: view === "new" },
+    { view: "assigned", label: "طلبات مسندة", active: view === "assigned" },
+    { view: "closed", label: "مكتملة", active: view === "closed" },
+  ];
+
+  const shown = items?.length || 0;
+  const total = pagination?.count ?? shown;
+  const canMore = pagination && pagination.offset + pagination.limit < total;
+
+  return renderShell({
+    user,
+    title: "لوحة الموظف",
+    subtitle: "استقبال الطلبات الجديدة وإسنادها للمندوبين، مع مؤشرات سريعة.",
+    error,
+    body: `
+      <div class="kpis">
+        <div class="kpi"><div class="muted small">جديدة</div><b>${esc(stats.new ?? "0")}</b></div>
+        <div class="kpi"><div class="muted small">مسندة</div><b>${esc(stats.assigned ?? "0")}</b></div>
+        <div class="kpi"><div class="muted small">مكتملة</div><b>${esc(stats.closed ?? "0")}</b></div>
+        <div class="kpi"><div class="muted small">الإجمالي</div><b>${esc(stats.total ?? "0")}</b></div>
       </div>
-    </div>
-  `;
-}
 
-function renderKpis(kpis = {}) {
-  const box = (title, val) => `
-    <div class="col" style="min-width:160px;padding:12px;border:1px solid rgba(255,255,255,.12);border-radius:14px">
-      <div class="small muted">${escapeHtml(title)}</div>
-      <div class="strong" style="font-size:22px;margin-top:6px">${escapeHtml(val)}</div>
-    </div>
-  `;
-  return `
-    <div class="row" style="gap:10px;flex-wrap:wrap;margin-top:10px">
-      ${box("الإجمالي", kpis.total ?? "—")}
-      ${box("الجديد", kpis.new ?? "—")}
-      ${box("المسند", kpis.assigned ?? "—")}
-      ${box("المكتمل", kpis.closed ?? "—")}
-    </div>
-  `;
-}
-
-/** ====== AGENT ====== */
-export function renderAgent({
-  user,
-  pushStatus = "",
-  view = "assigned",
-  q = "",
-  kpis = {},
-  items = [],
-  error = "",
-  pagination = { limit: 50, offset: 0, count: 0 },
-} = {}) {
-  const tabs = `
-    <div class="row" style="gap:10px;flex-wrap:wrap;justify-content:flex-end">
-      <button class="btn ${view === "assigned" ? "" : "btn--ghost"}" data-action="agentTab" data-view="assigned">المسندة</button>
-      <button class="btn ${view === "closed" ? "" : "btn--ghost"}" data-action="agentTab" data-view="closed">المكتملة</button>
-      <button class="btn ${view === "all" ? "" : "btn--ghost"}" data-action="agentTab" data-view="all">الكل</button>
-    </div>
-  `;
-
-  const list =
-    error
-      ? `<div class="alert">${escapeHtml(error)}</div>`
-      : items.length === 0
-        ? `<div class="muted">لا توجد طلبات حالياً.</div>`
-        : `
-          <div class="list">
-            ${items.map((r) => {
-              const id = r.id ?? "";
-              const name = r.customer_name ?? r.customer_nam ?? "—";
-              const phone = r.phone ?? "";
-              const e164 = toE164SA(phone);
-              const district = r.district ?? "—";
-              const status = r.status ?? "—";
-              const weight = (r.weight ?? "").toString();
-              const mapsBtn = (Number.isFinite(Number(r.lat)) && Number.isFinite(Number(r.lng)))
-                ? `<a class="btn btn--ghost" target="_blank" rel="noreferrer" href="https://www.google.com/maps?q=${encodeURIComponent(r.lat + "," + r.lng)}">الخريطة</a>`
-                : `<button class="btn btn--ghost" disabled>الخريطة</button>`;
-
-              return `
-                <div class="list__item" style="padding:14px">
-                  <div class="row" style="justify-content:space-between;gap:10px;align-items:flex-start;flex-wrap:wrap">
-                    <div>
-                      <div class="strong" style="font-size:18px">${escapeHtml(name)}</div>
-                      <div class="small muted" style="margin-top:6px">الحي: ${escapeHtml(district)}</div>
-                      <div class="small muted">الجوال: ${escapeHtml(phone || "—")}</div>
-                    </div>
-                    <div style="text-align:left">
-                      ${pillStatus(status)}
-                      <div class="pill" style="margin-top:8px">${escapeHtml(id)}</div>
-                    </div>
-                  </div>
-
-                  <div class="row" style="gap:10px;flex-wrap:wrap;margin-top:12px">
-                    <a class="btn btn--ghost" href="${phone ? `tel:${escapeHtml(phone)}` : "#"}" ${phone ? "" : "disabled"}>اتصال</a>
-                    <a class="btn btn--ghost" target="_blank" rel="noreferrer" href="${e164 ? `https://wa.me/${e164}` : "#"}" ${e164 ? "" : "disabled"}>واتساب</a>
-                    ${mapsBtn}
-                  </div>
-
-                  <div class="row" style="gap:10px;flex-wrap:wrap;align-items:center;margin-top:12px">
-                    <input class="input" style="max-width:160px" inputmode="numeric" placeholder="الوزن" value="${escapeHtml(weight)}" data-weight-input="${escapeHtml(id)}" />
-                    <button class="btn" data-action="saveWeight" data-id="${escapeHtml(id)}">حفظ الوزن</button>
-                    <button class="btn btn--danger" data-action="closeReq" data-id="${escapeHtml(id)}">إغلاق الطلب</button>
-                  </div>
-
-                  ${googleMapEmbed(r.lat, r.lng)}
-                </div>
-              `;
-            }).join("")}
-          </div>
-        `;
-
-  const shown = Math.min(pagination.offset + items.length, pagination.count || (pagination.offset + items.length));
-  const canLoadMore = pagination.count != null && (pagination.offset + items.length) < pagination.count;
-
-  return renderShell(`
-    ${renderTopBar({ user })}
-
-    <div class="hr"></div>
-
-    <h2 class="h2">لوحة المندوب</h2>
-    <div class="muted">تظهر هنا طلباتك المسندة فقط (مع إمكانية عرض المكتملة).</div>
-
-    ${renderKpis(kpis)}
-
-    <div class="hr"></div>
-
-    ${tabs}
-
-    <div class="row" style="gap:10px;flex-wrap:wrap;margin-top:12px;align-items:center">
-      <input id="agentSearch" class="input" placeholder="بحث (اسم/رقم/جوال/حي...)" value="${escapeHtml(q)}" />
-      <button class="btn" data-action="agentRefresh">تحديث</button>
-      <div class="small muted" style="margin-inline-start:auto">المعروض: ${shown}/${escapeHtml(pagination.count ?? "—")}</div>
-    </div>
-
-    <div class="hr"></div>
-
-    <div id="agentList">
-      ${list}
-    </div>
-
-    ${canLoadMore ? `
       <div class="hr"></div>
-      <button class="btn btn--ghost" data-action="loadMore">تحميل المزيد</button>
-    ` : ``}
 
-    <div class="hr"></div>
-    <div class="pill">🔔 الإشعارات</div>
-    <div class="small" style="margin-top:10px;">${escapeHtml(pushStatus || "—")}</div>
-  `);
+      ${renderToolbar({ viewButtons, q })}
+      <div class="muted small" style="margin-top:8px">المعروض: ${shown} / ${total}</div>
+
+      ${renderList({ items, mode: "staff", agents })}
+
+      ${canMore ? `<div class="row" style="justify-content:center;margin-top:12px">
+        <button class="btn" data-action="loadMore">تحميل المزيد</button>
+      </div>` : ""}
+    `,
+  });
 }
 
-/** ====== STAFF ====== */
-export function renderStaff({
-  user,
-  pushStatus = "",
-  view = "new",
-  q = "",
-  kpis = {},
-  agents = [],
-  items = [],
-  error = "",
-  pagination = { limit: 50, offset: 0, count: 0 },
-} = {}) {
-  const tabs = `
-    <div class="row" style="gap:10px;flex-wrap:wrap;justify-content:flex-end">
-      <button class="btn ${view === "new" ? "" : "btn--ghost"}" data-action="staffTab" data-view="new">طلبات جديدة</button>
-      <button class="btn ${view === "assigned" ? "" : "btn--ghost"}" data-action="staffTab" data-view="assigned">طلبات مسندة</button>
-      <button class="btn ${view === "closed" ? "" : "btn--ghost"}" data-action="staffTab" data-view="closed">مكتملة</button>
-      <button class="btn ${view === "all" ? "" : "btn--ghost"}" data-action="staffTab" data-view="all">الكل</button>
-    </div>
-  `;
+export function renderAdmin({ user, items, view, q, pagination, agents = [], stats = {}, error }) {
+  const viewButtons = [
+    { view: "all", label: "الكل", active: view === "all" },
+    { view: "new", label: "جديدة", active: view === "new" },
+    { view: "assigned", label: "مسندة", active: view === "assigned" },
+    { view: "closed", label: "مكتملة", active: view === "closed" },
+  ];
 
-  const agentOptions = [`<option value="">— اختر مندوب —</option>`]
-    .concat(agents.map((a) => `<option value="${escapeHtml(a.username)}">${escapeHtml(a.name || a.username)} (${escapeHtml(a.username)})</option>`))
-    .join("");
+  const shown = items?.length || 0;
+  const total = pagination?.count ?? shown;
+  const canMore = pagination && pagination.offset + pagination.limit < total;
 
-  const list =
-    error
-      ? `<div class="alert">${escapeHtml(error)}</div>`
-      : items.length === 0
-        ? `<div class="muted">لا توجد طلبات.</div>`
-        : `
-          <div class="list">
-            ${items.map((r) => {
-              const id = r.id ?? "";
-              const name = r.customer_name ?? "—";
-              const phone = r.phone ?? "";
-              const district = r.district ?? "—";
-              const status = r.status ?? "—";
-              const agentName = r.agent_name ?? "";
-              return `
-                <div class="list__item" style="padding:14px">
-                  <div class="row" style="justify-content:space-between;gap:10px;align-items:flex-start;flex-wrap:wrap">
-                    <div>
-                      <div class="strong">${escapeHtml(name)}</div>
-                      <div class="small muted">الحي: ${escapeHtml(district)} | الجوال: ${escapeHtml(phone || "—")}</div>
-                      <div class="small muted">المندوب: <b>${escapeHtml(agentName || "—")}</b></div>
-                    </div>
-                    <div style="text-align:left">
-                      ${pillStatus(status)}
-                      <div class="pill" style="margin-top:8px">${escapeHtml(id)}</div>
-                    </div>
-                  </div>
+  return renderShell({
+    user,
+    title: "لوحة المدير",
+    subtitle: "متابعة المؤشرات وإدارة الطلبات وإسنادها.",
+    error,
+    body: `
+      <div class="kpis">
+        <div class="kpi"><div class="muted small">جديدة</div><b>${esc(stats.new ?? "0")}</b></div>
+        <div class="kpi"><div class="muted small">مسندة</div><b>${esc(stats.assigned ?? "0")}</b></div>
+        <div class="kpi"><div class="muted small">مكتملة</div><b>${esc(stats.closed ?? "0")}</b></div>
+        <div class="kpi"><div class="muted small">الإجمالي</div><b>${esc(stats.total ?? "0")}</b></div>
+      </div>
 
-                  <div class="row" style="gap:10px;flex-wrap:wrap;align-items:center;margin-top:12px">
-                    <select class="input" style="max-width:260px" data-assign-select="${escapeHtml(id)}">
-                      ${agentOptions}
-                    </select>
-                    <button class="btn" data-action="assign" data-id="${escapeHtml(id)}">إسناد</button>
-                    <button class="btn btn--danger" data-action="unassign" data-id="${escapeHtml(id)}">إلغاء الإسناد</button>
-                  </div>
-                </div>
-              `;
-            }).join("")}
-          </div>
-        `;
-
-  const shown = Math.min(pagination.offset + items.length, pagination.count || (pagination.offset + items.length));
-  const canLoadMore = pagination.count != null && (pagination.offset + items.length) < pagination.count;
-
-  return renderShell(`
-    ${renderTopBar({ user })}
-
-    <div class="hr"></div>
-
-    <h2 class="h2">لوحة الموظف</h2>
-    <div class="muted">استقبال الطلبات وإسنادها للمندوبين.</div>
-
-    ${renderKpis(kpis)}
-
-    <div class="hr"></div>
-    ${tabs}
-
-    <div class="row" style="gap:10px;flex-wrap:wrap;margin-top:12px;align-items:center">
-      <input id="staffSearch" class="input" placeholder="بحث..." value="${escapeHtml(q)}" />
-      <button class="btn" data-action="staffRefresh">تحديث</button>
-      <div class="small muted" style="margin-inline-start:auto">المعروض: ${shown}/${escapeHtml(pagination.count ?? "—")}</div>
-    </div>
-
-    <div class="hr"></div>
-
-    <div id="staffList">${list}</div>
-
-    ${canLoadMore ? `
       <div class="hr"></div>
-      <button class="btn btn--ghost" data-action="staffLoadMore">تحميل المزيد</button>
-    ` : ``}
 
-    <div class="hr"></div>
-    <div class="pill">🔔 الإشعارات</div>
-    <div class="small" style="margin-top:10px;">${escapeHtml(pushStatus || "—")}</div>
-  `);
-}
+      ${renderToolbar({ viewButtons, q })}
+      <div class="muted small" style="margin-top:8px">المعروض: ${shown} / ${total}</div>
 
-/** ====== ADMIN ====== */
-export function renderAdmin({
-  user,
-  pushStatus = "",
-  view = "all",
-  q = "",
-  kpis = {},
-  items = [],
-  error = "",
-} = {}) {
-  const list =
-    error
-      ? `<div class="alert">${escapeHtml(error)}</div>`
-      : items.length === 0
-        ? `<div class="muted">لا توجد بيانات.</div>`
-        : `
-          <div class="list">
-            ${items.slice(0, 20).map((r) => `
-              <div class="list__item">
-                <div class="row" style="justify-content:space-between;gap:10px;align-items:center">
-                  <div>
-                    <div class="strong">${escapeHtml(r.customer_name || "—")}</div>
-                    <div class="small muted">الحالة: ${escapeHtml(r.status || "—")} | المندوب: ${escapeHtml(r.agent_name || "—")}</div>
-                  </div>
-                  <div class="pill">${escapeHtml(r.id || "")}</div>
-                </div>
-              </div>
-            `).join("")}
-          </div>
-        `;
+      ${renderList({ items, mode: "admin", agents })}
 
-  return renderShell(`
-    ${renderTopBar({ user })}
-
-    <div class="hr"></div>
-
-    <h2 class="h2">لوحة المدير</h2>
-    <div class="muted">مؤشرات سريعة + آخر الطلبات (20).</div>
-
-    ${renderKpis(kpis)}
-
-    <div class="hr"></div>
-
-    <div class="row" style="gap:10px;flex-wrap:wrap;align-items:center">
-      <input id="adminSearch" class="input" placeholder="بحث..." value="${escapeHtml(q)}" />
-      <button class="btn" data-action="adminRefresh">تحديث</button>
-      <button class="btn btn--ghost" data-action="adminTab" data-view="new">جديد</button>
-      <button class="btn btn--ghost" data-action="adminTab" data-view="assigned">مسند</button>
-      <button class="btn btn--ghost" data-action="adminTab" data-view="closed">مكتمل</button>
-      <button class="btn" data-action="adminTab" data-view="all">الكل</button>
-    </div>
-
-    <div class="hr"></div>
-
-    ${list}
-
-    <div class="hr"></div>
-    <div class="pill">🔔 الإشعارات</div>
-    <div class="small" style="margin-top:10px;">${escapeHtml(pushStatus || "—")}</div>
-  `);
+      ${canMore ? `<div class="row" style="justify-content:center;margin-top:12px">
+        <button class="btn" data-action="loadMore">تحميل المزيد</button>
+      </div>` : ""}
+    `,
+  });
 }
